@@ -668,9 +668,14 @@ class LearningShapelets:
     def __init__(self, shapelets_size_and_len, loss_func, in_channels=1, num_classes=2,
                  dist_measure='euclidean', verbose=0, to_cuda=True, k=0, l1=0.0, l2=0.0):
 
-        self.model = LearningShapeletsModel(shapelets_size_and_len=shapelets_size_and_len,
-                                            in_channels=in_channels, num_classes=num_classes, dist_measure=dist_measure,
-                                            to_cuda=to_cuda)
+        self.model = LearningShapeletsModel(
+            shapelets_size_and_len=shapelets_size_and_len,
+            in_channels=in_channels, 
+            num_classes=num_classes, 
+            dist_measure=dist_measure,
+            to_cuda=to_cuda
+        )
+        
         self.to_cuda = to_cuda
         if self.to_cuda:
             self.model.cuda()

@@ -133,3 +133,4 @@ dmypy.json
 
 # Large data
 ua_list.json
+*.pth

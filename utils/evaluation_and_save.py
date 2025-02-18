@@ -1,0 +1,25 @@
+from sklearn.metrics import accuracy_score, f1_score, \
+    roc_auc_score, precision_score, recall_score
+import csv
+
+def eval_results(y, yhat):
+    if len(yhat.shape) == 2:
+        yhat = yhat.argmax(axis=1)
+        
+    accuracy = accuracy_score(y, yhat)
+    precision = precision_score(y, yhat)
+    f1 = f1_score(y, yhat)
+    recall = recall_score(y, yhat)
+    
+    return {
+        'accuracy': accuracy,
+        'precision': precision, 
+        'f1_score':f1, 
+        'recall': recall,
+    }
+def save_results_to_csv(results, filename="results.csv"):
+        keys = results[0].keys()
+        with open(filename, 'w', newline='') as output_file:
+            dict_writer = csv.DictWriter(output_file, fieldnames=keys)
+            dict_writer.writeheader()
+            dict_writer.writerows(results)

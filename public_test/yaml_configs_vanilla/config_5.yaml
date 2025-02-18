@@ -1,0 +1,6 @@
+batch_size: 256
+dataset: robot
+model_path: ./model/best_model_robot_5.pth
+nhead: 2
+num_epochs: 5000
+num_layers: 4

@@ -38,12 +38,6 @@ from src.learning_shapelets import LearningShapelets
 from aeon.datasets import load_classification
 import argparse
 root = './'
-# downsampling
-def take_mean(series, window_size = 4):
-    n = len(series)
-    reshaped = np.array(series)[:n - n % window_size].reshape(-1, window_size)
-    mean_value = reshaped.mean(axis=1)
-    return mean_value    
 
 def normalize_standard(X, scaler=None):
     shape = X.shape
@@ -206,7 +200,7 @@ def parse_args(configuration_path = "test.yaml"):
     parser.add_argument('--epsilon', type=float, default=config.get("epsilon",1e-7), help='Epsilon for the optimizer.')
     parser.add_argument('--dist_measure', type=str, default=config.get("epsilon", 'euclidean'), help='Distance measure for the shapelet model.')
     parser.add_argument('--num_shapelets_ratio', type=float, default=config.get("num_shapelets_ratio", 0.3), help='Number of shapelets as a ratio of the time series length.')
-    parser.add_argument('--size_ratio', type=float, default=config.get("size_ratio", [0.125]), help='Size of shapelets as a ratio of the time series length.')
+    parser.add_argument('--size_ratio', type=float, default=config.get("size_ratio", 0.125), help='Size of shapelets as a ratio of the time series length.')
     parser.add_argument('--folder', type=str, default='.', help='Folder to save the results.')
     args = parser.parse_args()
     
@@ -223,8 +217,6 @@ def train(index, configuration_path = "/ECG200/test.yaml"):
     x_train, x_test, label_train, label_test \
         = train_test_split(x, label, test_size = 0.3, shuffle=False, random_state=42)
     
-    # print(x_train.shape, label_train.shape)
-    # print(x_test.shape, label_test.shape)
     y = np.unique(label, return_inverse=True)[1]
     y_train = np.unique(label_train, return_inverse=True)[1]
     y_test = np.unique(label_test, return_inverse=True)[1]
@@ -259,7 +251,7 @@ def train(index, configuration_path = "/ECG200/test.yaml"):
                           in_channels = n_channels,
                           num_classes = num_classes,
                           loss_func = loss_func,
-                          to_cuda = False,
+                          to_cuda = True,
                           verbose = 1,
                           dist_measure = dist_measure)
     
@@ -385,35 +377,35 @@ if __name__ == "__main__":
     
     args = {}
     yaml_files = glob.glob(os.path.join(root, "yaml_configs_normal/*.yaml"))
-    for i, config_path in enumerate(yaml_files):
-        acc_list = []
-        time_list = []
-        for j in range(10):
-            start = time.time()
-            args, acc = train(index=i, configuration_path=config_path)
-            end = time.time()
-            elapsed = end - start
-            result = {     
-                "index": i,
-                "accuracy": acc,
-                "elapsed_time": elapsed
-            }
-            for key, value in vars(args).items():
-                result[key] = value
-            results.append(result)
-            acc_list.append(acc)
-            time_list.append(elapsed)
+    # for i, config_path in enumerate(yaml_files):
+    #     acc_list = []
+    #     time_list = []
+    #     for j in range(10):
+    #         start = time.time()
+    #         args, acc = train(index=i, configuration_path=config_path)
+    #         end = time.time()
+    #         elapsed = end - start
+    #         result = {     
+    #             "index": i,
+    #             "accuracy": acc,
+    #             "elapsed_time": elapsed
+    #         }
+    #         for key, value in vars(args).items():
+    #             result[key] = value
+    #         results.append(result)
+    #         acc_list.append(acc)
+    #         time_list.append(elapsed)
         
-        avg_result = {     
-            "index": i,
-            "accuracy": np.mean(acc_list), 
-            "elapsed_time": np.mean(time_list)
-        }
-        for key, value in vars(args).items():
-            result[key] = value
-        avg_results.append(result)
-        print(f"Total elapsed time: {elapsed:.2f} seconds")
-        print("-----------------")
-    save_results_to_csv(results, filename=args.dataset+"/public_fcn_3.csv")
-    save_results_to_csv(avg_results, filename=args.dataset+"/public_fcn_avg_3.csv")
-    # train(0)
+    #     avg_result = {     
+    #         "index": i,
+    #         "accuracy": np.mean(acc_list), 
+    #         "elapsed_time": np.mean(time_list)
+    #     }
+    #     for key, value in vars(args).items():
+    #         result[key] = value
+    #     avg_results.append(result)
+    #     print(f"Total elapsed time: {elapsed:.2f} seconds")
+    #     print("-----------------")
+    # save_results_to_csv(results, filename=args.dataset+"/public_fcn_3.csv")
+    # save_results_to_csv(avg_results, filename=args.dataset+"/public_fcn_avg_3.csv")
+    train(0)

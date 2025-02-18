@@ -3,12 +3,8 @@ import warnings
 
 import numpy as np
 import torch
-from torch import tensor, nn, optim
-from torch.nn.utils import clip_grad_norm_
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch import tensor, nn
 from torch.utils.data import DataLoader, TensorDataset
-from torch.nn import TransformerEncoder, TransformerEncoderLayer
-from torch.nn import Transformer
 from tqdm import tqdm
 
 class MinEuclideanDistBlock(nn.Module):
@@ -25,13 +21,12 @@ class MinEuclideanDistBlock(nn.Module):
     cuda : bool
         if true loads everything to the GPU
     """
-    def __init__(self, shapelets_size, num_shapelets, in_channels=1, step = 1, to_cuda=True):
+    def __init__(self, shapelets_size, num_shapelets, in_channels=1, to_cuda=True):
         super(MinEuclideanDistBlock, self).__init__()
         self.to_cuda = to_cuda
         self.num_shapelets = num_shapelets
         self.shapelets_size = shapelets_size
         self.in_channels = in_channels
-        self.step = step
 
         # if not registered as parameter, the optimizer will not be able to see the parameters
         shapelets = torch.randn(self.in_channels, self.num_shapelets, self.shapelets_size, requires_grad=True)
@@ -41,7 +36,7 @@ class MinEuclideanDistBlock(nn.Module):
         # otherwise gradients will not be backpropagated
         self.shapelets.retain_grad()
 
-    def forward(self, inp):
+    def forward(self, x):
         """
         1) Unfold the data set 2) calculate euclidean distance 3) sum over channels and 4) perform global min-pooling
         @param x: the time series data
@@ -50,23 +45,17 @@ class MinEuclideanDistBlock(nn.Module):
         @rtype: tensor(num_samples, num_shapelets)
         """
         # unfold time series to emulate sliding window
-       
-        x = inp.unfold(2, self.shapelets_size, 1).contiguous()
-        y = inp.unfold(2, self.shapelets_size, self.step).contiguous()
-        
+        x = x.unfold(2, self.shapelets_size, 1).contiguous()
         # calculate euclidean distance
         x = torch.cdist(x, self.shapelets, p=2)
-        y = torch.cdist(y, self.shapelets, p=2)
 
         # add up the distances of the channels in case of
         # multivariate time series
         # Corresponds to the approach 1 and 3 here: https://stats.stackexchange.com/questions/184977/multivariate-time-series-euclidean-distance
         x = torch.sum(x, dim=1, keepdim=True).transpose(2, 3)
-        y = torch.sum(y, dim=1, keepdim=True)
         # hard min compared to soft-min from the paper
         x, _ = torch.min(x, 3)
-        # x, _ = nn.Softmin(x, 3)
-        return x, y
+        return x
 
     def get_shapelets(self):
         """
@@ -326,7 +315,7 @@ class ShapeletsDistBlocks(nn.Module):
     to_cuda : bool
         if true loads everything to the GPU
     """
-    def __init__(self, shapelets_size_and_len, in_channels=1, step = 1, dist_measure='euclidean', to_cuda=True):
+    def __init__(self, shapelets_size_and_len, in_channels=1, dist_measure='euclidean', to_cuda=True):
         super(ShapeletsDistBlocks, self).__init__()
         self.to_cuda = to_cuda
         self.shapelets_size_and_len = OrderedDict(sorted(shapelets_size_and_len.items(), key=lambda x: x[0]))
@@ -335,7 +324,7 @@ class ShapeletsDistBlocks(nn.Module):
         if dist_measure == 'euclidean':
             self.blocks = nn.ModuleList(
                 [MinEuclideanDistBlock(shapelets_size=shapelets_size, num_shapelets=num_shapelets,
-                                       in_channels=in_channels, step=step, to_cuda=self.to_cuda)
+                                       in_channels=in_channels, to_cuda=self.to_cuda)
                  for shapelets_size, num_shapelets in self.shapelets_size_and_len.items()])
         elif dist_measure == 'cross-correlation':
             self.blocks = nn.ModuleList(
@@ -358,14 +347,11 @@ class ShapeletsDistBlocks(nn.Module):
         @return: a distance matrix containing the distances of each shapelet to the time series data
         @rtype: tensor(float) of shape
         """
-        out_trans = torch.tensor([], dtype=torch.float).cuda() if self.to_cuda else torch.tensor([], dtype=torch.float)
-        out_y = torch.tensor([], dtype=torch.float).cuda() if self.to_cuda else torch.tensor([], dtype=torch.float)
+        out = torch.tensor([], dtype=torch.float).cuda() if self.to_cuda else torch.tensor([], dtype=torch.float)
         for block in self.blocks:
-            x_trans, y = block(x)
-            out_trans = torch.cat((out_trans, x_trans), dim=2)
-            out_y = torch.cat((out_y, y), dim=3)
+            out = torch.cat((out, block(x)), dim=2)
 
-        return out_trans, out_y
+        return out
 
     def get_blocks(self):
         """
@@ -565,30 +551,18 @@ class LearningShapeletsModel(nn.Module):
     to_cuda : bool
         if true loads everything to the GPU
     """
-    def __init__(self, shapelets_size_and_len, in_channels=1, step=1, 
-                 num_classes=2, dist_measure='euclidean',
-                 nhead = 2, num_layers = 4,
+    def __init__(self, shapelets_size_and_len, in_channels=1, num_classes=2, dist_measure='euclidean',
                  to_cuda=True):
         super(LearningShapeletsModel, self).__init__()
 
         self.to_cuda = to_cuda
         self.shapelets_size_and_len = shapelets_size_and_len
         self.num_shapelets = sum(shapelets_size_and_len.values())
-        shapelet_size = list(shapelets_size_and_len)[0]
-        # self.shapelet_size, _ = shapelets_size_and_len.items()
         self.shapelets_blocks = ShapeletsDistBlocks(in_channels=in_channels,
-                                                    step=step,
                                                     shapelets_size_and_len=shapelets_size_and_len,
                                                     dist_measure=dist_measure, to_cuda=to_cuda)
-       
-        self.transformer_encoder = Transformer(d_model = self.num_shapelets, 
-                                               nhead = nhead, 
-                                               num_encoder_layers = num_layers, 
-                                               num_decoder_layers = num_layers,
-                                               batch_first = True
-                                               )
         self.linear = nn.Linear(self.num_shapelets, num_classes)
-        
+
         if self.to_cuda:
             self.cuda()
 
@@ -600,13 +574,11 @@ class LearningShapeletsModel(nn.Module):
         @return: the logits for the class predictions of the model
         @rtype: tensor(float) of shape (num_samples, num_classes)
         """
-        # x = self.shapelets_blocks(x)
-        x, y = self.shapelets_blocks(x)
-        y = torch.squeeze(y, 1)
-        y = self.transformer_encoder(y[:, :-1, :], y[:, 1:, :])
+        x = self.shapelets_blocks(x)
         if optimize == 'acc':
-            y = self.linear(y[:, -1, :])
-        return y
+            x = self.linear(x)
+        x = torch.squeeze(x, 1)
+        return x
 
     def transform(self, X):
         """
@@ -616,8 +588,7 @@ class LearningShapeletsModel(nn.Module):
         @return: the shapelet transform of x
         @rtype: tensor(float) of shape (num_samples, num_shapelets)
         """
-        X_trans, _ = self.shapelets_blocks(X)
-        return X_trans
+        return self.shapelets_blocks(X)
 
     def get_shapelets(self):
         """
@@ -694,19 +665,17 @@ class LearningShapelets:
     to_cuda : bool
         if true loads everything to the GPU
     """
-    def __init__(self, shapelets_size_and_len, loss_func, 
-                 in_channels=1, step=1, num_classes=2,
-                 nhead = 2, num_layers = 2,
-                 dist_measure='euclidean', verbose=0, 
-                 to_cuda=True, k=0, l1=0.0, l2=0.0):
+    def __init__(self, shapelets_size_and_len, loss_func, in_channels=1, num_classes=2,
+                 dist_measure='euclidean', verbose=0, to_cuda=True, k=0, l1=0.0, l2=0.0):
 
-        self.model = LearningShapeletsModel(shapelets_size_and_len=shapelets_size_and_len,
-                                            in_channels=in_channels, step=step,
-                                            num_classes=num_classes,
-                                            nhead=nhead, 
-                                            num_layers=num_layers,
-                                            dist_measure=dist_measure,
-                                            to_cuda=to_cuda)
+        self.model = LearningShapeletsModel(
+            shapelets_size_and_len=shapelets_size_and_len,
+            in_channels=in_channels, 
+            num_classes=num_classes, 
+            dist_measure=dist_measure,
+            to_cuda=to_cuda
+        )
+        
         self.to_cuda = to_cuda
         if self.to_cuda:
             self.model.cuda()
@@ -867,8 +836,6 @@ class LearningShapelets:
         losses_ce = []
         losses_dist = []
         losses_sim = []
-        scheduler = ReduceLROnPlateau(self.optimizer, mode='min', 
-                                      factor=0.1, patience=10, verbose=True)
         progress_bar = tqdm(range(epochs), disable=False if self.verbose > 0 else True)
         current_loss_ce = 0
         current_loss_dist = 0
@@ -884,7 +851,7 @@ class LearningShapelets:
                         current_loss_ce, current_loss_dist, current_loss_sim = self.update_regularized(x, y)
                     else:
                         current_loss_ce, current_loss_dist = self.update_regularized(x, y)
-                    # losses_ce.append(current_loss_ce)
+                    losses_ce.append(current_loss_ce)
                     losses_dist.append(current_loss_dist)
                     if self.l2 > 0.0:
                         losses_sim.append(current_loss_sim)
@@ -896,8 +863,6 @@ class LearningShapelets:
                                                  f"Loss sim: {current_loss_sim}")
                 else:
                     progress_bar.set_description(f"Loss CE: {current_loss_ce}, Loss dist: {current_loss_dist}")
-            scheduler.step(current_loss_ce)
-            losses_ce.append(current_loss_ce)
         return losses_ce if not self.use_regularizer else (losses_ce, losses_dist, losses_sim) if self.l2 > 0.0 else (
         losses_ce, losses_dist)
 

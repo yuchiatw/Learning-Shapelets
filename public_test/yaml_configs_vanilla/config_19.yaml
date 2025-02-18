@@ -1,0 +1,6 @@
+batch_size: 128
+dataset: ECG200
+model_path: ./model/best_model_ECG200_19.pth
+nhead: 4
+num_epochs: 5000
+num_layers: 2

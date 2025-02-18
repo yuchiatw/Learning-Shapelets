@@ -292,7 +292,7 @@ def train(index, args):
                             step=args.step,
                             num_classes = num_classes,
                             loss_func = loss_func,
-                            to_cuda = False,
+                            to_cuda = True,
                             verbose = 1,
                             dist_measure = args.dist_measure, 
                             nhead=args.nhead,
