@@ -35,7 +35,6 @@ import torch
 from torch import nn, optim
 
 from src.learning_shapelets import LearningShapelets
-from utils.evaluation_and_save import eval_results
 from aeon.datasets import load_classification
 import argparse
 root = './'
@@ -201,7 +200,7 @@ def parse_args(configuration_path = "test.yaml"):
     parser.add_argument('--epsilon', type=float, default=config.get("epsilon",1e-7), help='Epsilon for the optimizer.')
     parser.add_argument('--dist_measure', type=str, default=config.get("epsilon", 'euclidean'), help='Distance measure for the shapelet model.')
     parser.add_argument('--num_shapelets_ratio', type=float, default=config.get("num_shapelets_ratio", 0.3), help='Number of shapelets as a ratio of the time series length.')
-    parser.add_argument('--size_ratio', type=float, default=config.get("size_ratio", [0.125, 0.2]), help='Size of shapelets as a ratio of the time series length.')
+    parser.add_argument('--size_ratio', type=float, default=config.get("size_ratio", 0.125), help='Size of shapelets as a ratio of the time series length.')
     parser.add_argument('--folder', type=str, default='.', help='Folder to save the results.')
     args = parser.parse_args()
     
@@ -217,15 +216,11 @@ def train(index, configuration_path = "/ECG200/test.yaml"):
     x, label = load_classification(load_dataset)
     x_train, x_test, label_train, label_test \
         = train_test_split(x, label, test_size = 0.3, shuffle=False, random_state=42)
-    x_train, x_val, label_train, label_val \
-        = train_test_split(x_train, label_train, test_size=0.1, shuffle=False, random_state=42)
     
     y = np.unique(label, return_inverse=True)[1]
     y_train = np.unique(label_train, return_inverse=True)[1]
-    y_val = np.unique(label_val, return_inverse=True)[1]
     y_test = np.unique(label_test, return_inverse=True)[1]
     x_train, scaler = normalize_data(x_train)
-    x_val, scaler = normalize_data(x_val)
     x_test, scaler = normalize_data(x_test)
 
     
@@ -233,6 +228,7 @@ def train(index, configuration_path = "/ECG200/test.yaml"):
     loss_func = nn.CrossEntropyLoss()
     num_classes = len(set(y_train))
     
+    size_ratio = args.size_ratio
     num_shapelets_ratio = args.num_shapelets_ratio
     dist_measure = args.dist_measure
     lr = args.lr
@@ -242,33 +238,40 @@ def train(index, configuration_path = "/ECG200/test.yaml"):
     batch_size = args.batch_size
     num_shapelets = args.num_shapelets_ratio * len_ts
     size_ratio_list = args.size_ratio
-    shapelets_size_and_len = dict()
-    for i in range(len(size_ratio_list)):
-        key = int(len_ts * size_ratio_list[i])
-        shapelets_size_and_len[key] = int(len_ts * num_shapelets_ratio)
-        
+    shapelets_size_and_len = {
+        int(size_ratio_list * len_ts): int(num_shapelets), 
+    }
     
-    model = LearningShapelets(shapelets_size_and_len=shapelets_size_and_len, 
-                          in_channels = n_channels,
-                          num_classes = num_classes,
-                          loss_func = loss_func,
-                          to_cuda = True,
-                          verbose = 1,
-                          dist_measure = dist_measure)
     
-    start = time.time()
-    for i, (shapelets_size, num_shapelets) in enumerate(shapelets_size_and_len.items()):
-        weights_block = get_weights_via_kmeans(x_train, shapelets_size, num_shapelets)
-        model.set_shapelet_weights_of_block(i, weights_block)
     
-    optimizer = optim.Adam(model.model.parameters(), lr=lr, weight_decay=wd, eps=epsilon)
-    model.set_optimizer(optimizer)
-    loss = model.fit(x_train, y_train, epochs=num_epochs, batch_size=batch_size, shuffle=False, drop_last=False)
-    elapsed = time.time() - start
-    predictions = model.predict(x_test)
-    results = eval_results(y_test, predictions)
+    # model = LearningShapelets(shapelets_size_and_len=shapelets_size_and_len, 
+    #                       in_channels = n_channels,
+    #                       num_classes = num_classes,
+    #                       loss_func = loss_func,
+    #                       to_cuda = True,
+    #                       verbose = 1,
+    #                       dist_measure = dist_measure)
+    
+    # for i, (shapelets_size, num_shapelets) in enumerate(shapelets_size_and_len.items()):
+    #     weights_block = get_weights_via_kmeans(x_train, shapelets_size, num_shapelets)
+    #     model.set_shapelet_weights_of_block(i, weights_block)
+    
+    # optimizer = optim.Adam(model.model.parameters(), lr=lr, weight_decay=wd, eps=epsilon)
+    # model.set_optimizer(optimizer)
+    # output_dir = os.path.join(os.path.join(root, args.dataset), "normal_results")
+    # os.makedirs(output_dir, exist_ok=True)
+    # loss = model.fit(x_train, y_train, epochs=num_epochs, batch_size=batch_size, shuffle=False, drop_last=False)
 
-    return elapsed, args, results
+    # acc = eval_accuracy(model, x_test, y_test)
+    # shapelets = model.get_shapelets()
+    # x_normal, scaler = normalize_standard(x)
+    # shapelet_transform = model.transform(x_normal)
+    # dist_s1 = shapelet_transform[:, 0]
+    # dist_s2 = shapelet_transform[:, 1]
+    
+    # weights, biases = model.get_weights_linear_layer()
+    
+    # return args, acc
 
 def save_results_to_csv(results, filename="results.csv"):
         keys = results[0].keys()
@@ -279,29 +282,31 @@ def save_results_to_csv(results, filename="results.csv"):
             
 if __name__ == "__main__":
     avg_results = []
-    train(0)
+    
+    args = {}
     yaml_files = glob.glob(os.path.join(root, "yaml_configs_normal/*.yaml"))
-    acc_list = []
-    f1_list = []
-    recall_list = []
-    precision_list = []
-    train_loss_list = []
-    val_loss_list = []
-    elapsed_list = []
-    for i, config_path in enumerate(yaml_files):
-        acc_list = []
-        time_list = []
-        for j in range(10):
-            elapsed, args, report = train(index=i, configuration_path=config_path)
+    # for i, config_path in enumerate(yaml_files):
+    #     acc_list = []
+    #     time_list = []
+    #     for j in range(10):
+    #         start = time.time()
+    #         args, acc = train(index=i, configuration_path=config_path)
+    #         end = time.time()
+    #         elapsed = end - start
+    #         results.append(result)
+    #         acc_list.append(acc)
+    #         time_list.append(elapsed)
         
-        avg_result = {     
-            "index": i,
-            "accuracy": np.mean(acc_list), 
-            "elapsed_time": np.mean(time_list)
-        }
-        for key, value in vars(args).items():
-            result[key] = value
-        avg_results.append(result)
-        print(f"Total elapsed time: {elapsed:.2f} seconds")
-        print("-----------------")
-    save_results_to_csv(avg_results, filename=args.dataset+"/public_fcn_avg_3.csv")
+    #     avg_result = {     
+    #         "index": i,
+    #         "accuracy": np.mean(acc_list), 
+    #         "elapsed_time": np.mean(time_list)
+    #     }
+    #     for key, value in vars(args).items():
+    #         result[key] = value
+    #     avg_results.append(result)
+    #     print(f"Total elapsed time: {elapsed:.2f} seconds")
+    #     print("-----------------")
+    # save_results_to_csv(results, filename=args.dataset+"/public_fcn_3.csv")
+    # save_results_to_csv(avg_results, filename=args.dataset+"/public_fcn_avg_3.csv")
+    train(0)
