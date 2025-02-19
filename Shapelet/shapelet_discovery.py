@@ -78,7 +78,7 @@ class ShapeletDiscover():
         time1 = time.time()
         self.train_data_piss = \
             [auto_pisd.auto_piss_extractor(i, train_data[i, 0], num_pip=self.num_pip) for i in range(len(train_data))]
-        # ci_return = [auto_pisd.auto_ci_extractor(train_data[i], self.train_data_piss[i]) for i in range(len(train_data))]
+        ci_return = [auto_pisd.auto_ci_extractor(train_data[i], self.train_data_piss[i]) for i in range(len(train_data))]
         # self.train_data_ci = np.asarray([ci_return[i][0] for i in range(len(ci_return))])
         # self.train_data_ci_piss = np.asarray([ci_return[i][1] for i in range(len(ci_return))])
         time1 = time.time() - time1
