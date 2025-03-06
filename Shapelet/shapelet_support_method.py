@@ -32,7 +32,7 @@ def sort_by_sub_dist(list_sub_dist, input_label):
     return list_label_table, list_subdist_table
 
 
-def find_best_split_point_and_info_gain(list_sub_dist, input_label, target_class):
+def  find_best_split_point_and_info_gain(list_sub_dist, input_label, target_class):
 
     list_label_table, list_subdist_table = sort_by_sub_dist(list_sub_dist=list_sub_dist,
                                                             input_label=input_label)

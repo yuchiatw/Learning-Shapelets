@@ -200,7 +200,7 @@ def parse_args(configuration_path = "test.yaml"):
     
     parser = argparse.ArgumentParser(description="Train a model")
     parser.add_argument("--dataset", type=str, default=config.get('dataset',"ECG200"))
-    parser.add_argument('--num_epochs', type=int, default=config.get('num_epochs', 1000), help='Number of epochs for training.')
+    parser.add_argument('--num_epochs', type=int, default=config.get('num_epochs', 100), help='Number of epochs for training.')
     parser.add_argument('--batch_size', type=int, default=config.get('batch_size', 32), help='Batch size for training.')
     parser.add_argument('--nhead', type=int, default=config.get('nhead', 4), help='Number of heads for the transformer model.')
     parser.add_argument('--num_layers', type=int, default=config.get('num_layers', 2), help='Number of layers for the transformer model.')
@@ -209,9 +209,9 @@ def parse_args(configuration_path = "test.yaml"):
     parser.add_argument('--epsilon', type=float, default=config.get("epsilon",1e-7), help='Epsilon for the optimizer.')
     parser.add_argument('--dist_measure', type=str, default=config.get("epsilon", 'euclidean'), help='Distance measure for the shapelet model.')
     parser.add_argument('--num_shapelets_ratio', type=float, default=config.get("num_shapelets_ratio", 0.1), help='Number of shapelets as a ratio of the time series length.')
-    parser.add_argument('--size_ratio', type=float, default=config.get("size_ratio", 0.25), help='Size of shapelets as a ratio of the time series length.')
-    parser.add_argument('--folder', type=str, default='.', help='Folder to save the results.')
-    parser.add_argument('--step', type=int, default=config.get("step",1), help='Step size for sliding window.')
+    parser.add_argument('--size_ratio', type=float, default=config.get("size_ratio", 0.15), help='Size of shapelets as a ratio of the time series length.')
+    parser.add_argument('--step', type=int, default=config.get("step",10), help='Step size for sliding window.')
+    parser.add_argument('--window_size', type=int, default=config.get("window_size", 30))
     args = parser.parse_args()
     
     return args
@@ -256,12 +256,15 @@ def train(index, configuration_path = "/ECG200/test1.yaml"):
         num_shapelets = int(num_shapelets // args.nhead) * args.nhead
     
     shapelets_size_and_len = {
-        int(size_ratio * len_ts): num_shapelets, 
+        int(0.05 * len_ts): num_shapelets, 
+        int(0.1 * len_ts): num_shapelets, 
     }
     
-    
-    
+    print(len_ts)
+    window_size = max(shapelets_size_and_len.keys())
     model = LearningShapelets(shapelets_size_and_len=shapelets_size_and_len, 
+                          seq_len= len_ts,
+                          window_size = window_size,
                           in_channels = n_channels,
                           step=step,
                           num_classes = num_classes,
@@ -387,24 +390,24 @@ def save_results_to_csv(results, filename="results.csv"):
             
 if __name__ == "__main__":
     results = []
-    
-    yaml_files = glob.glob(os.path.join(root, "yaml_configs/*.yaml"))
-    for i, config_path in enumerate(yaml_files):
-        start = time.time()
-        args, acc = train(index = i, configuration_path=config_path)
-        end = time.time()
-        elapsed = end - start
-        result = {     
-            "index": i,
-            "accuracy": acc,
-            "elapsed_time": elapsed
-        }
-        for key, value in vars(args).items():
-            result[key] = value
-        results.append(result)
+    train(0)
+    # yaml_files = glob.glob(os.path.join(root, "yaml_configs/*.yaml"))
+    # for i, config_path in enumerate(yaml_files):
+    #     start = time.time()
+    #     args, acc = train(index = i, configuration_path=config_path)
+    #     end = time.time()
+    #     elapsed = end - start
+    #     result = {     
+    #         "index": i,
+    #         "accuracy": acc,
+    #         "elapsed_time": elapsed
+    #     }
+    #     for key, value in vars(args).items():
+    #         result[key] = value
+    #     results.append(result)
 
-        print(f"Total elapsed time: {elapsed:.2f} seconds")
-        print("-----------------")
+    #     print(f"Total elapsed time: {elapsed:.2f} seconds")
+    #     print("-----------------")
         
-    save_results_to_csv(results, filename="results_public_trans.csv")
+    # save_results_to_csv(results, filename="results_public_trans.csv")
         

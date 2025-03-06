@@ -43,6 +43,7 @@ def load_yaml_config(filepath):
 
 def parse_args(config):
     parser = argparse.ArgumentParser(description='Experiment with vanilla transformer.')
+    parser.add_argument("--dataset", type=str, default=config.get('dataset',"ECG200"))
     parser.add_argument('--num_epochs', type=int, default=config.get('num_epochs', 5000), help='Number of epochs for training.')
     parser.add_argument('--batch_size', type=int, default=config.get('batch_size', 64), help='Batch size for training.')
     parser.add_argument('--nhead', type=int, default=config.get('nhead', 4), help='Number of heads for the transformer model.')

@@ -797,7 +797,9 @@ class LearningShapelets:
         return (loss_ce.item(), loss_dist.item(), loss_sim.item()) if self.l2 > 0.0 else (
         loss_ce.item(), loss_dist.item())
 
-    def fit(self, X, Y, epochs=1, batch_size=256, shuffle=False, drop_last=False):
+    def fit(self, X, Y, X_val=None, Y_val=None,  
+            epochs=1, batch_size=256, shuffle=False, drop_last=False, 
+            model_path = './model/model_test.pth'):
         """
         Train the model.
         @param X: the time series data set
@@ -826,16 +828,31 @@ class LearningShapelets:
         if self.to_cuda:
             X = X.cuda()
             Y = Y.cuda()
+        
+        val_dataset = None
+        val_loader = None
+        if X_val is not None and Y_val is not None:
+            if not isinstance(X_val, torch.Tensor):
+                X_val = tensor(X_val, dtype=torch.float32).contiguous()
+            if not isinstance(Y_val, torch.Tensor):
+                Y_val = tensor(Y_val, dtype=torch.long).contiguous()
+            if self.to_cuda:
+                X_val = X_val.cuda()
+                Y_val = Y_val.cuda()
+            val_dataset = TensorDataset(X_val, Y_val)
+            val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, drop_last=False)
+            
 
         train_ds = TensorDataset(X, Y)
         train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=shuffle, drop_last=drop_last)
-
         # set model in train mode
         self.model.train()
 
         losses_ce = []
         losses_dist = []
         losses_sim = []
+        val_loss = []
+        best_val_loss = float('inf')
         progress_bar = tqdm(range(epochs), disable=False if self.verbose > 0 else True)
         current_loss_ce = 0
         current_loss_dist = 0
@@ -863,8 +880,40 @@ class LearningShapelets:
                                                  f"Loss sim: {current_loss_sim}")
                 else:
                     progress_bar.set_description(f"Loss CE: {current_loss_ce}, Loss dist: {current_loss_dist}")
-        return losses_ce if not self.use_regularizer else (losses_ce, losses_dist, losses_sim) if self.l2 > 0.0 else (
-        losses_ce, losses_dist)
+            if val_loader is not None:
+                self.model.eval()
+                batch_loss = []
+                with torch.no_grad():
+                    for j, (x, y) in enumerate(val_loader):
+                        yhat = self.model(x)
+                        loss = self.loss_func(yhat, y)
+                        batch_loss.append(loss.item())
+                val_loss_epoch = sum(batch_loss) / len(batch_loss)
+                val_loss.append(val_loss_epoch)
+                
+                # Early stopping
+                if val_loss_epoch < best_val_loss:
+                    best_val_loss = val_loss_epoch
+                    epochs_no_improve = 0
+                    torch.save(self.model.state_dict(), model_path)
+                else:
+                    epochs_no_improve += 1
+                
+                # if epochs_no_improve >= patience:
+                #     print(f"Early stopping at epoch {epoch}")
+                #     break
+                
+                self.model.train()
+        if not self.use_regularizer:
+            if val_loader is not None:
+                return losses_ce, best_val_loss
+            else: 
+                return losses_ce
+        elif self.l2 > 0.0:
+            return (losses_ce, losses_dist, losses_sim)  
+        else: 
+            
+            return (losses_ce, losses_dist)
 
     def transform(self, X):
         """
@@ -951,3 +1000,5 @@ class LearningShapelets:
         """
         return (self.model.linear.weight.data.clone().cpu().detach().numpy(),
                 self.model.linear.bias.data.clone().cpu().detach().numpy())
+    def load_model(self, model_path='./model/best_model.pth'):
+        self.model.load_state_dict((torch.load(model_path, weights_only=True)))

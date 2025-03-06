@@ -23,3 +23,10 @@ def save_results_to_csv(results, filename="results.csv"):
             dict_writer = csv.DictWriter(output_file, fieldnames=keys)
             dict_writer.writeheader()
             dict_writer.writerows(results)
+            
+# def save_results_to_csv(results, filename="results.csv"):
+#     with open(filename, mode='w', newline='') as file:
+#         writer = csv.writer(file)
+#         writer.writerow(["Parameter", "Value"])  # Header
+#         for key, value in results.items():
+#             writer.writerow([key, value])

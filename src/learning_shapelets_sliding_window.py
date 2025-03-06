@@ -24,11 +24,12 @@ class MinEuclideanDistBlock(nn.Module):
     cuda : bool
         if true loads everything to the GPU
     """
-    def __init__(self, shapelets_size, num_shapelets, in_channels=1, step = 1, to_cuda=True):
+    def __init__(self, shapelets_size, num_shapelets, in_channels=1, window_size = 30, step = 1, seq_len=1, to_cuda=True):
         super(MinEuclideanDistBlock, self).__init__()
         self.to_cuda = to_cuda
         self.num_shapelets = num_shapelets
         self.shapelets_size = shapelets_size
+        self.window_size = window_size
         self.in_channels = in_channels
         self.step = step
 
@@ -51,21 +52,22 @@ class MinEuclideanDistBlock(nn.Module):
         # unfold time series to emulate sliding window
        
         x = inp.unfold(2, self.shapelets_size, 1).contiguous()
-        y = inp.unfold(2, self.shapelets_size, self.step).contiguous()
+        y_ = inp.unfold(2, self.window_size, self.step).contiguous()
+        y_ = y_.unfold(3, self.shapelets_size, self.step).contiguous()
         
         # calculate euclidean distance
         x = torch.cdist(x, self.shapelets, p=2)
-        y = torch.cdist(y, self.shapelets, p=2)
+        y_ = torch.cdist(y_, self.shapelets, p=3)
+        y_, _ = torch.min(y_, 3)
 
         # add up the distances of the channels in case of
         # multivariate time series
         # Corresponds to the approach 1 and 3 here: https://stats.stackexchange.com/questions/184977/multivariate-time-series-euclidean-distance
         x = torch.sum(x, dim=1, keepdim=True).transpose(2, 3)
-        y = torch.sum(y, dim=1, keepdim=True)
         # hard min compared to soft-min from the paper
         x, _ = torch.min(x, 3)
         # x, _ = nn.Softmin(x, 3)
-        return x, y
+        return x, y_
 
     def get_shapelets(self):
         """
@@ -325,7 +327,7 @@ class ShapeletsDistBlocks(nn.Module):
     to_cuda : bool
         if true loads everything to the GPU
     """
-    def __init__(self, shapelets_size_and_len, in_channels=1, step = 1, dist_measure='euclidean', to_cuda=True):
+    def __init__(self, shapelets_size_and_len,window_size = 30, in_channels=1, step = 1, dist_measure='euclidean', to_cuda=True):
         super(ShapeletsDistBlocks, self).__init__()
         self.to_cuda = to_cuda
         self.shapelets_size_and_len = OrderedDict(sorted(shapelets_size_and_len.items(), key=lambda x: x[0]))
@@ -334,7 +336,7 @@ class ShapeletsDistBlocks(nn.Module):
         if dist_measure == 'euclidean':
             self.blocks = nn.ModuleList(
                 [MinEuclideanDistBlock(shapelets_size=shapelets_size, num_shapelets=num_shapelets,
-                                       in_channels=in_channels, step=step, to_cuda=self.to_cuda)
+                                       window_size=window_size, in_channels=in_channels, step=step, to_cuda=self.to_cuda)
                  for shapelets_size, num_shapelets in self.shapelets_size_and_len.items()])
         elif dist_measure == 'cross-correlation':
             self.blocks = nn.ModuleList(
@@ -564,7 +566,7 @@ class LearningShapeletsModel(nn.Module):
     to_cuda : bool
         if true loads everything to the GPU
     """
-    def __init__(self, shapelets_size_and_len, in_channels=1, step=1, 
+    def __init__(self, shapelets_size_and_len, seq_len, window_size = 30, in_channels=1, step=1, 
                  num_classes=2, dist_measure='euclidean',
                  nhead = 2, num_layers = 4,
                  to_cuda=True):
@@ -573,12 +575,12 @@ class LearningShapeletsModel(nn.Module):
         self.to_cuda = to_cuda
         self.shapelets_size_and_len = shapelets_size_and_len
         self.num_shapelets = sum(shapelets_size_and_len.values())
-        shapelet_size = list(shapelets_size_and_len)[0]
-        # self.shapelet_size, _ = shapelets_size_and_len.items()
+        self.transform_seq_len = int((seq_len - window_size)/step+1)
         self.shapelets_blocks = ShapeletsDistBlocks(in_channels=in_channels,
-                                                    step=step,
+                                                    step=step, window_size=window_size,
                                                     shapelets_size_and_len=shapelets_size_and_len,
                                                     dist_measure=dist_measure, to_cuda=to_cuda)
+        self.positional_emb = nn.Embedding(self.transform_seq_len, self.num_shapelets)
         encoder_layers = TransformerEncoderLayer(d_model=self.num_shapelets, nhead = nhead, batch_first=True)
         self.transformer_encoder = TransformerEncoder(encoder_layers, num_layers=num_layers)
         self.linear = nn.Linear(self.num_shapelets, num_classes)
@@ -597,7 +599,10 @@ class LearningShapeletsModel(nn.Module):
         # x = self.shapelets_blocks(x)
         x, y = self.shapelets_blocks(x)
         y = torch.squeeze(y, 1)
-        y = self.transformer_encoder(y)
+        batch_size, seq_len, num_shapelets = y.shape
+        pos_indices = torch.arange(self.transform_seq_len, device=x.device).unsqueeze(0).expand(batch_size, seq_len)
+        pos_emb = self.positional_emb(pos_indices)
+        y = self.transformer_encoder(y+pos_emb)
         if optimize == 'acc':
             y = self.linear(y[:, -1, :])
         return y
@@ -689,12 +694,14 @@ class LearningShapelets:
         if true loads everything to the GPU
     """
     def __init__(self, shapelets_size_and_len, loss_func, 
+                 seq_len, window_size = 30,
                  in_channels=1, step=1, num_classes=2,
                  nhead = 2, num_layers = 2,
                  dist_measure='euclidean', verbose=0, 
                  to_cuda=True, k=0, l1=0.0, l2=0.0):
 
         self.model = LearningShapeletsModel(shapelets_size_and_len=shapelets_size_and_len,
+                                            seq_len=seq_len, window_size=window_size,
                                             in_channels=in_channels, step=step,
                                             num_classes=num_classes,
                                             nhead=nhead, 
@@ -822,7 +829,10 @@ class LearningShapelets:
         return (loss_ce.item(), loss_dist.item(), loss_sim.item()) if self.l2 > 0.0 else (
         loss_ce.item(), loss_dist.item())
 
-    def fit(self, X, Y, epochs=1, batch_size=256, shuffle=False, drop_last=False):
+    def fit(self, X, Y, X_val=None, Y_val=None, 
+            epochs=1, batch_size=256, shuffle=False, 
+            drop_last=False, model_path='./model/best_model.pth'
+        ):
         """
         Train the model.
         @param X: the time series data set
@@ -854,19 +864,35 @@ class LearningShapelets:
 
         train_ds = TensorDataset(X, Y)
         train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=shuffle, drop_last=drop_last)
-
+        val_dataset = None
+        val_loader = None
+        if X_val is not None and Y_val is not None:
+            if not isinstance(X_val, torch.Tensor):
+                X_val = tensor(X_val, dtype=torch.float32).contiguous()
+            if not isinstance(Y_val, torch.Tensor):
+                Y_val = tensor(Y_val, dtype=torch.long).contiguous()
+            if self.to_cuda:
+                X_val = X_val.cuda()
+                Y_val = Y_val.cuda()
+            val_dataset = TensorDataset(X_val, Y_val)
+            val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, drop_last=False)
         # set model in train mode
         self.model.train()
 
-        losses_ce = []
-        losses_dist = []
-        losses_sim = []
         scheduler = ReduceLROnPlateau(self.optimizer, mode='min', 
                                       factor=0.1, patience=10, verbose=True)
         progress_bar = tqdm(range(epochs), disable=False if self.verbose > 0 else True)
+        
+        losses_ce = []
+        losses_dist = []
+        losses_sim = []
+        val_loss = []
+        best_val_loss = float('inf')
+        
         current_loss_ce = 0
         current_loss_dist = 0
         current_loss_sim = 0
+        
         for _ in progress_bar:
             for j, (x, y) in enumerate(train_dl):
                 # check if training should be done with regularizer
@@ -892,9 +918,39 @@ class LearningShapelets:
                     progress_bar.set_description(f"Loss CE: {current_loss_ce}, Loss dist: {current_loss_dist}")
             scheduler.step(current_loss_ce)
             losses_ce.append(current_loss_ce)
-        return losses_ce if not self.use_regularizer else (losses_ce, losses_dist, losses_sim) if self.l2 > 0.0 else (
-        losses_ce, losses_dist)
-
+            if val_loader is not None:
+                self.model.eval()
+                batch_loss = []
+                with torch.no_grad():
+                    for j, (x, y) in enumerate(val_loader):
+                        yhat = self.model(x)
+                        loss = self.loss_func(yhat, y)
+                        batch_loss.append(loss.item())
+                val_loss_epoch = sum(batch_loss) / len(batch_loss)
+                val_loss.append(val_loss_epoch)
+                # Early stopping
+                if val_loss_epoch < best_val_loss:
+                    best_val_loss = val_loss_epoch
+                    epochs_no_improve = 0
+                    torch.save(self.model.state_dict(), model_path)
+                else:
+                    epochs_no_improve += 1
+                
+                # if epochs_no_improve >= patience:
+                #     print(f"Early stopping at epoch {epoch}")
+                #     break
+                
+                self.model.train()
+        if not self.use_regularizer:
+            if val_loader is not None:
+                return losses_ce, best_val_loss
+            else: 
+                return losses_ce
+        elif self.l2 > 0.0:
+            return (losses_ce, losses_dist, losses_sim)  
+        else: 
+            
+            return (losses_ce, losses_dist)
     def transform(self, X):
         """
         Performs the shapelet transform with the input time series data x
@@ -980,3 +1036,5 @@ class LearningShapelets:
         """
         return (self.model.linear.weight.data.clone().cpu().detach().numpy(),
                 self.model.linear.bias.data.clone().cpu().detach().numpy())
+    def load_model(self, model_path='./model/best_model.pth'):
+        self.model.load_state_dict((torch.load(model_path, weights_only=True)))

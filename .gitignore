@@ -133,4 +133,11 @@ dmypy.json
 
 # Large data
 ua_list.json
+*.json
 *.pth
+*.pt
+*.xlsx
+*.csv
+puclic_test/*.csv
+*.yaml
+*.npz

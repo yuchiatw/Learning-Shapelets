@@ -2,15 +2,15 @@ import itertools
 import yaml
 import os
 
-window_size = [60, 80]
-n_bins = [2]
-window_step = [1]
+nhead = [2]
+epochs = [200, 400]
+batch_size = [32, 64, 128]
 
 combinations = list(itertools.product(
-        window_size, n_bins, window_step
+        epochs, batch_size
     ))
 
-output_dir = './yaml_BOSS'
+output_dir = './yaml_LT_pips'
 os.makedirs(output_dir, exist_ok=True)
 
 base_config = {
@@ -24,7 +24,7 @@ base_config = {
         'step_min': 1,
     },
     'init_mode': 'pips',
-    'model_mode': 'JOINT',
+    'model_mode': 'LT_Transformer',
     'init_config': {
         'ws_rate': 0.1,
         'num_pip': 0.1, 
@@ -34,6 +34,8 @@ base_config = {
     'model_config': {
         'epochs': 200, 
         'batch_size': 32, 
+        'nhead': 2,
+        'num_layers': 4,
         'model_path': './model/best_model',
         'step': 1,
         'lr': 1e-3, 
@@ -44,9 +46,9 @@ base_config = {
 
 for i, combo in enumerate(combinations):
     config = base_config.copy()
-    config['model_config']['window_size'] = combo[0]
-    config['model_config']['n_bins'] = combo[1]
-    config['model_config']['window_step'] = combo[2]
+    config['model_config']['model_path'] = f'./model/preterm_LT_PIPs_{i}.pth'
+    config['model_config']['epochs'] = combo[0]
+    config['model_config']['batch_size'] = combo[1]
     
     with open(os.path.join(output_dir, f'config_{i}.yaml'), 'w') as file:
         yaml.dump(config, file, default_flow_style=False, sort_keys=False)

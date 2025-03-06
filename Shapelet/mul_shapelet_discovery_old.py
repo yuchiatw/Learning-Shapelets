@@ -71,6 +71,7 @@ class ShapeletDiscover():
         return list_shapelet
 
     def find_ppi(self, i, l, d):
+        print("discovery %s - %s - %s" % (i, l, d))
         list_result = []
         ts_pos = self.group_train_data_pos[l][i] # ID for this sample
         pdm = {}
@@ -82,6 +83,7 @@ class ShapeletDiscover():
             t2 = self.train_data[p][d] # d is dimension
             matrix_1, matrix_2 = auto_pisd.calculate_matrix(t1, t2, self.window_size)
             pdm[ts_pos * 100000 + p] = matrix_1
+        print("T1: %s" % (time.time() - time1))
         time1 = time.time()
         for j in range(len(self.group_train_data_piss[l][i][d])): # for each candidate from this time series
             ts_pis = self.group_train_data_piss[l][i][d][j] # sc_j
@@ -107,6 +109,7 @@ class ShapeletDiscover():
             # time series position, start_pos, end_pos, inforgain, label, dim
             ppi = [ts_pos, ts_pis[0], ts_pis[1], ig, self.list_labels[l], d]
             list_result.append(ppi)
+        print("T2: %s" % (time.time() - time1))
         return list_result
 
     def find_ppi2(self, d, l, i):
@@ -203,17 +206,15 @@ class ShapeletDiscover():
         # Select shapelet for a group of label
         self.list_group_ppi = [[] for i in range(len(self.list_labels))]
         print("prepare 2")
-        num_cpus = multiprocessing.cpu_count()
-        print(f"Available CPU cores: {num_cpus}.")
-        
+        print(multiprocessing.cpu_count())
         pool = multiprocessing.Pool(processes=self.processes)
         print("prepare 3")
         if flag == 1:
-            for l in range(len(self.list_labels)): # How many labels
+            for l in range(len(self.list_labels)): # How many label
                 for d in range(self.dim): # in_channels
                     print("l:%s-%s" % (l,d))
-                    temp_ppi = pool.map(partial(self.find_ppi, l=l, d=d), range(len(self.group_train_data[l])))
-                    # temp_ppi = [self.find_ppi(i, l, d) for i in range(len(self.group_train_data[l]))] # for all samples in this class and on this dim
+                    # temp_ppi = pool.map(partial(self.find_ppi, l=l, d=d), range(len(self.group_train_data[l])))
+                    temp_ppi = [self.find_ppi(i, l, d) for i in range(len(self.group_train_data[l]))] # for all samples in this class and on this dim
                     list_ppi = []
                     for i in range(len(self.group_train_data[l])):
                         pii_in_i = temp_ppi[i]
@@ -224,11 +225,9 @@ class ShapeletDiscover():
         else:
             for l in range(len(self.list_labels)):
                 for i in range(len(self.group_train_data[l])):
-                    temp_ppi = pool.map(partial(self.find_ppi2, l=l, i=i), range(self.dim))
-                    # temp_ppi = [self.find_ppi(i, l, d) for d in range(self.dim)]
+                    # temp_ppi = pool.map(partial(self.find_ppi2, l=l, i=i), range(self.dim))
+                    temp_ppi = [self.find_ppi(i, l, d) for d in range(self.dim)]
                     self.list_group_ppi[l].append(temp_ppi)
-        pool.close()
-        pool.join()
 
         time2 = time.time() - time2
         print("window_size: %s - evaluating_time: %s" % (self.window_size, time2))

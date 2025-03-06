@@ -8,9 +8,7 @@ sys.path.insert(0, os.getcwd())
 import pandas as pd
 import numpy as np
 
-import pickle
 import json
-import math
 import random
 import argparse
 import yaml
@@ -288,6 +286,7 @@ def train(index, args):
 
     # set n head as the division of number of shapelets
     model = LearningShapelets(shapelets_size_and_len=shapelets_size_and_len, 
+                              seq_len=len_ts,
                             in_channels = n_channels,
                             step=args.step,
                             num_classes = num_classes,

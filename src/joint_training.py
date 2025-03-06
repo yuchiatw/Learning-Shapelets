@@ -1,121 +1,104 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = "0"
+
+import sys
+sys.path.insert(0, os.path.abspath('../'))
+sys.path.insert(0, os.getcwd())
+import warnings
+
+from src.learning_shapelets_sliding_window import LearningShapeletsModel
+from src.vanilla_transformer import TimeSeriesTransformer
 import torch
-import torch.nn as nn
-import torch.optim as optim
 from torch import tensor
+from torch import nn, optim
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 import torch.nn.functional as F
 import numpy as np
 
-class TimeSeriesTransformer(nn.Module):
-    """
-    Implement Vanilla Transformer
-    --------
-    Args:
-        seq_len    : Maximum sequence length expected.
-        d_model    : Dimensionality of the Transformer embeddings.
-        nhead      : Number of attention heads.
-        num_layers : Number of Transformer encoder layers.
-        num_classes: Number of target classes.
-        channels   : Number of channels in the input (C).
-        batch_first: If True, the transformer expects [B, L, E], else [L, B, E].
-    """
+class MultiBranchModel(nn.Module):
     def __init__(
-        self,
-        seq_len: int,
-        num_classes: int,
-        channels: int = 1,   # Number of input channels/features
-        d_model: int = 4,
-        nhead: int = 2,
-        num_layers: int = 2,
-        batch_first: bool = True, 
-        to_cuda: bool = True,
+        self, shapelets_size_and_len, seq_len, 
+        window_size = 30, in_channels=1, step=1, 
+        num_classes=2, dist_measure='euclidean',
+        nhead = 2, num_layers = 4, d_model = 4,
+        to_cuda=True
     ):
+        super(MultiBranchModel, self).__init__()
         
-        super().__init__()
+        # Create branches with focused feature extraction
         self.to_cuda = to_cuda
-        self.seq_len = seq_len
-        self.d_model = d_model
-        self.batch_first = batch_first
-        
-        # 1) Linear projection from input channels to d_model
-        self.input_projection = nn.Linear(channels, d_model)
-        
-        # 2) Learned positional embedding
-        self.positional_emb = nn.Embedding(seq_len, d_model)
-        
-        # 3) Transformer encoder
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model,
+        self.LearningShapelets = LearningShapeletsModel(
+            shapelets_size_and_len=shapelets_size_and_len,
+            seq_len=seq_len, 
+            window_size=window_size,
+            in_channels=in_channels,
+            step=step,
+            num_classes=num_classes,
+            num_layers=num_layers,
             nhead=nhead,
-            dim_feedforward=4 * d_model,
-            batch_first=batch_first,  # PyTorch 2.0+ 
+            dist_measure=dist_measure,
+            to_cuda=to_cuda
         )
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.vanilla = TimeSeriesTransformer(
+            seq_len=seq_len,
+            num_classes=num_classes,
+            channels=in_channels,
+            d_model=d_model,
+            num_layers=num_layers,
+            nhead=nhead,
+            to_cuda=to_cuda
+        )
         
-        # 4) Classification head
-        self.fc = nn.Linear(d_model, num_classes)
         
+        # Learnable fusion weights
+        self.fusion_weights = nn.Parameter(torch.randn(2))  # Two branches
+    
+        # Optional fusion network
+        self.fusion_layer = nn.Linear(num_classes, num_classes)
         if self.to_cuda:
             self.cuda()
 
     def forward(self, x):
-        """
-        x shape: [batch_size, channels, seq_len]
-        Returns: [batch_size, num_classes]
-        """
-        # (A) Permute to [batch_size, seq_len, channels]
-        #     so each time step is a row in the sequence dimension
-        x = x.permute(0, 2, 1)  # => [B, L, C]
+        # Extract features from both branches
+        shapelets_out = self.LearningShapelets(x)  # Output: (batch, num_classes)
+        transformer_out = self.vanilla(x)          # Output: (batch, num_classes)
         
-        batch_size, seq_len, _ = x.shape
+        # # Compute dynamic weights (softmax for normalization)
+        fusion_weights = F.softmax(self.fusion_weights, dim=0)  # (2,)
         
-        # (B) Project to d_model: [B, L, C] => [B, L, d_model]
-        x = self.input_projection(x)
+        # # Apply weighted fusion
+        fused_output = (fusion_weights[0] * shapelets_out) + (fusion_weights[1] * transformer_out)
         
-        # (C) Create position indices: shape => [B, L]
-        pos_indices = torch.arange(seq_len, device=x.device).unsqueeze(0).expand(batch_size, seq_len)
-        
-        # (D) Get positional embeddings: [B, L, d_model]
-        pos_emb = self.positional_emb(pos_indices)
-        
-        # (E) Add positional embeddings to input
-        x = x + pos_emb
-        
-        # (F) Pass through Transformer encoder
-        x = self.transformer_encoder(x)  # => [B, L, d_model] (with batch_first=True)
-        
-        # (G) Pool over sequence dimension: mean pool as an example
-        x = x.mean(dim=1)  # => [B, d_model]
-        
-        # (H) Classification layer
-        logits = self.fc(x)  # => [B, num_classes]
-        
-        return logits
-class Vanilla:
-    def __init__(self, 
+        # # Optional refinement via fusion network
+        fused_output = self.fusion_layer(fused_output)
+
+        return fused_output
+class MultiBranch:
+    def __init__(self, shapelets_size_and_len, seq_len, 
         loss_func,
-        seq_len: int,
-        num_classes: int,
-        channels: int = 1,   # Number of input channels/features
-        d_model: int = 4,
-        nhead: int = 2,
-        num_layers: int = 2,
-        batch_first: bool = True, 
-        to_cuda: bool = True,
+        window_size = 30, in_channels=1, step=1, 
+        num_classes=2, dist_measure='euclidean',
+        nhead = 2, num_layers = 4, d_model = 4,
+        verbose = 0,
+        to_cuda=True
     ):
-        self.model = TimeSeriesTransformer(
+        self.model = MultiBranchModel(
+            shapelets_size_and_len=shapelets_size_and_len,
             seq_len=seq_len,
-            channels=channels,
+            window_size=window_size,
+            in_channels=in_channels,
+            step=step,
             num_classes=num_classes,
             num_layers=num_layers,
-            nhead=nhead, 
-            d_model=d_model,
-            batch_first=batch_first,
+            nhead=nhead, d_model=d_model,
+            dist_measure=dist_measure,
             to_cuda=to_cuda
         )
         self.to_cuda = to_cuda
+        self.shapelets_size_and_len = shapelets_size_and_len
         self.loss_func = loss_func
+        self.verbose = verbose
         self.optimizer = None
     def set_optimizer(self, optimizer):
         """
@@ -126,7 +109,36 @@ class Vanilla:
         @rtype: None
         """
         self.optimizer = optimizer
-   
+    def set_shapelet_weights(self, weights):
+        """
+        Set the weights of all shapelets. The shapelet weights are expected to be ordered ascending according to the
+        length of the shapelets. The values in the matrix for shapelets of smaller length than the maximum
+        length are just ignored.
+        @param weights: the weights to set for the shapelets
+        @type weights: array-like(float) of shape (in_channels, num_total_shapelets, shapelets_size_max)
+        @return:
+        @rtype: None
+        """
+        self.model.LearningShapelets.set_shapelet_weights(weights)
+        if self.optimizer is not None:
+            warnings.warn("Updating the model parameters requires to reinitialize the optimizer. Please reinitialize"
+                          " the optimizer via set_optimizer(optim)")
+    def set_shapelet_weights_of_block(self, i, weights):
+        """
+        Set the weights of shapelet block i.
+        @param i: The index of the shapelet block
+        @type i: int
+        @param weights: the weights for the shapelets of block i
+        @type weights: array-like(float) of shape (in_channels, num_shapelets, shapelets_size)
+        @return:
+        @rtype: None
+        """
+        self.model.LearningShapelets.set_shapelet_weights_of_block(i, weights)
+        if self.optimizer is not None:
+            warnings.warn("Updating the model parameters requires to reinitialize the optimizer. Please reinitialize"
+                          " the optimizer via set_optimizer(optim)")
+
+
     def fit(
         self,
         X, Y, 
@@ -238,37 +250,37 @@ class Vanilla:
                 result = y_hat if result is None else np.concatenate((result, y_hat), axis=0)
         
         return result
-
-        print("Loss:", loss.item())
     def load_model(self, model_path='./model/best_model.pth'):
         self.model.load_state_dict((torch.load(model_path, weights_only=True)))
-# ---------------------- Usage Example ----------------------
+        
+# --------------- Usage Example --------------------
 if __name__ == "__main__":
     # Hyperparameters
     SEQ_LEN = 50    # e.g., each time series has length=50
     CHANNELS = 1    # univariate
     D_MODEL = 64
-    NHEAD = 8
+    NHEAD = 2
     NUM_LAYERS = 2
     NUM_CLASSES = 2 # example number of classes
     BATCH_SIZE = 16
-
-    # Instantiate the model
-    model = TimeSeriesTransformer(seq_len=SEQ_LEN,
-                                  d_model=D_MODEL,
-                                  nhead=NHEAD,
-                                  num_layers=NUM_LAYERS,
-                                  num_classes=NUM_CLASSES,
-                                  channels=CHANNELS,
-                                  batch_first=True)
-    
-    # Create a random batch of shape [B, C, L]
-    # e.g., univariate: shape = [16, 1, 50]
     x = torch.randn(BATCH_SIZE, CHANNELS, SEQ_LEN)
-    
+    shapelets_size_and_len = {10: 2, 15: 2}
+    model = MultiBranchModel(
+        shapelets_size_and_len=shapelets_size_and_len,
+        seq_len=SEQ_LEN,
+        in_channels=CHANNELS,
+        window_size=15,
+        step=1,
+        num_classes=NUM_CLASSES,
+        nhead=NHEAD,
+        num_layers=NUM_LAYERS,
+        d_model=4, 
+        to_cuda=False
+        
+    )
     # Forward pass
     logits = model(x)
-    print("Logits shape:", logits.shape)  # [16, 3]
+    print("Logits shape:", logits.shape)  # [16, 2]
 
     # Define a loss, optimizer
     labels = torch.randint(high=NUM_CLASSES, size=(BATCH_SIZE,))

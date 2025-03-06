@@ -35,28 +35,35 @@ import matplotlib.pyplot as plt
 from matplotlib import cm
 
 import torch
-from torch import nn, optim
 
-import argparse
 
-def normalize_standard(X, scaler=None):
+def normalize_standard(X, mode='minmax', scaler=None):
     shape = X.shape
     data_flat = X.flatten()
     if scaler is None:
         scaler = MinMaxScaler()
+        if mode == 'standard':
+            scaler = StandardScaler()
         data_transformed = scaler.fit_transform(data_flat.reshape(np.prod(shape), 1)).reshape(shape)
     else:
         data_transformed = scaler.transform(data_flat.reshape(np.prod(shape), 1)).reshape(shape)
     return data_transformed, scaler
 
-def normalize_data(X, scaler=None):
+def normalize_data(X, mode='minmax', glob_norm=False, scaler=None):
+    '''
+    Input:
+    - X: time series data
+    - mode: 'minmax' or 'standard'  
+    - Scaler: if None, fit the scaler to the data
+    '''
     if scaler is None:
         for i in range(X.shape[0]):
-            X[i], scaler = normalize_standard(X[i])
+            X[i], scaler = normalize_standard(X[i], mode=mode)
     else:
         X, scaler = normalize_standard(X, scaler)
     
     return X, scaler
+
 def segment_time_series(time_series, label, ID, segment_length = 200):
     n = len(time_series)
     # Number of complete segments

@@ -2,8 +2,8 @@ import itertools
 import yaml
 import os
 
-window_size = [60, 80]
-n_bins = [2]
+window_size = [20, 30, 40]
+n_bins = [2, 5, 8]
 window_step = [1]
 
 combinations = list(itertools.product(
@@ -18,28 +18,9 @@ base_config = {
         'test_ratio': 0.2,
         'val_ratio': 0.2,
         'norm_std': 'standard',
-        'norm_mode': 'local_before',
-        'seq_min': 15,
-        'pad_min': 3, 
-        'step_min': 1,
     },
-    'init_mode': 'pips',
-    'model_mode': 'JOINT',
-    'init_config': {
-        'ws_rate': 0.1,
-        'num_pip': 0.1, 
-        'num_shapelets_make': 100, 
-        'num_shapelets': 10,
-    },
-    'model_config': {
-        'epochs': 200, 
-        'batch_size': 32, 
-        'model_path': './model/best_model',
-        'step': 1,
-        'lr': 1e-3, 
-        'wd': 1e-4, 
-        'epsilon': 1e-7
-    },
+    'model_mode': 'BOSS',
+    'model_config':{}
 }
 
 for i, combo in enumerate(combinations):
@@ -50,4 +31,3 @@ for i, combo in enumerate(combinations):
     
     with open(os.path.join(output_dir, f'config_{i}.yaml'), 'w') as file:
         yaml.dump(config, file, default_flow_style=False, sort_keys=False)
-

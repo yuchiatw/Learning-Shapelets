@@ -10,7 +10,7 @@ def auto_piss_extractor(i, time_series=None, num_pip=0.2, j=0, return_pip=0):
         a = (p2_y - p3_y) / (p2_x - p3_x)
         c = p2_y - p2_x * a
         return abs(b * p1_y + a * p1_x + c) / ((a ** 2 + b ** 2)**0.5)
-    print("extract - %s - %s - %s" %(j, i, num_pip))
+    # print("extract - %s - %s - %s" %(j, i, num_pip)) 
     ts = time_series[i]
     max_no_pip = int(num_pip*len(ts))
     if max_no_pip < 5:
@@ -69,10 +69,10 @@ def auto_ci_extractor(time_series, piss):
     ts_ci = []
     list_ci_piss = [[] for i in range(len(piss))]
     for i in range(len(piss)):
-        ts_ci.append(ci_calculate(time_series[i]))
+        ts_ci.append(ci_calculate(time_series[i])) # CE(time_seroes)
         sc = piss[i]
         for j in range(len(sc)):
-            ci = (np.sum(ts_ci[sc[j][0]:sc[j][1] - 1]) + 0.001)**0.5
+            ci = (np.sum(ts_ci[sc[j][0]:sc[j][1] - 1]) + 0.001)**0.5 # CE(sc)
             list_ci_piss[i].append(ci)
     return ts_ci, list_ci_piss
 
