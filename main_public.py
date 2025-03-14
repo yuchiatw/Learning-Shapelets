@@ -17,7 +17,7 @@ from aeon.datasets import load_classification
 from torch import nn, optim
 from tslearn.clustering import TimeSeriesKMeans
 from sklearn.metrics import log_loss
-
+from preterm_preprocessing.preterm_preprocessing import preterm_pipeline
 from public_preprocessing.public_preprocessing import public_pipeline
 from Shapelet.mul_shapelet_discovery import ShapeletDiscover
 from src.learning_shapelets import LearningShapelets as LearningShapeletsFCN
@@ -44,7 +44,6 @@ def shapelet_initialization(
         num_pip = config['num_pip']
         num_shapelets_make = config['num_shapelets_make']
         num_shapelets=config['num_shapelets']
-        
         
         if os.path.exists(f'./data/list_shapelets_meta_{dataset}_{ws_rate}_{num_pip}_{num_shapelets_make}.csv'):
             df_shapelets_meta = pd.read_csv(f'./data/list_shapelets_meta_{dataset}_{ws_rate}_{num_pip}_{num_shapelets_make}.csv')
@@ -163,6 +162,8 @@ def train_ls(
             num_classes=num_classes,
             window_size=window_size,
             step=config['step'], 
+            nhead=config['nhead'],
+            num_layers=config['num_layers'],
             verbose=1,
             to_cuda=True
         )
@@ -235,7 +236,7 @@ def update_config(default_config, yaml_config):
         elif key in default_config:
             default_config[key] = value  # Update only existing keys
 
-def exp(config, dataset, store_results = False):
+def exp(config, datatype = 'public', dataset='ECG5000', store_results = False):
     '''
     Return: 
     - elapsed: time spent for training
@@ -247,6 +248,13 @@ def exp(config, dataset, store_results = False):
 
     if os.path.exists(data_path):
         data = np.load(data_path)
+    elif datatype == 'private':
+        data = preterm_pipeline(
+            config=config['data_loading'], 
+            meta_path='./data/filtered_clinical_data_v2.csv', 
+            strip_path='./data/filtered_strips_data_v2.json', 
+            data_path=data_path
+        )
     else:
         data = public_pipeline(
             dataset=dataset, 
@@ -271,7 +279,9 @@ def exp(config, dataset, store_results = False):
     
     _, n_channels, len_ts = X_train.shape
     num_classes = len(set(y_train))
-    if config['model_mode'] == 'LT_FCN' or config['model_mode'] == 'LT_Transformer' or config['model_mode'] == 'JOINT':
+    if config['model_mode'] == 'LT_FCN' \
+        or config['model_mode'] == 'LT_Transformer' \
+            or config['model_mode'] == 'JOINT':
         if config['init_mode'] == 'pips':
             print(config)
             shapelets_size_and_len, list_shapelets_meta, list_shapelets =\
@@ -285,7 +295,6 @@ def exp(config, dataset, store_results = False):
                 model_mode=config['model_mode'],
                 config=config['model_config'],
             )
-            return elapsed, results, val_loss
         else:
             shapelets_size_and_len = shapelet_initialization(X_train, y_train, config['init_config'], config['init_mode'] )
             elapsed, results, val_loss = train_ls(
@@ -295,7 +304,6 @@ def exp(config, dataset, store_results = False):
                 model_mode=config['model_mode'],
                 config=config['model_config']
             )
-            return elapsed, results, val_loss
     elif config['model_mode'] == 'BOSS':
         X_train = X_train.reshape(X_train.shape[0], X_train.shape[2])
         X_val = X_val.reshape(X_val.shape[0], X_val.shape[2])
@@ -315,7 +323,7 @@ def exp(config, dataset, store_results = False):
         y_pred = clf.predict(X_test)
         val_loss = log_loss(y_val, y_val_pred)
         results = eval_results(y_test, y_pred)
-        return elapsed, results, val_loss
+    return elapsed, results, val_loss
         
     # elif config['model_mode'] == 'vanilla':
     #     model_config = config['model_config']
@@ -387,7 +395,8 @@ if __name__=='__main__':
         val_loss_list = []
         elapsed_list = []
         for j in range(10):
-            elapsed, results, val_loss = exp(yaml_config, dataset)
+            elapsed, results, val_loss = \
+                exp(yaml_config, datatype='public', dataset=dataset)
             acc_list.append(results['accuracy'])
             precision_list.append(results['precision'])
             f1_list.append(results['f1_score'])
@@ -424,8 +433,6 @@ if __name__=='__main__':
             result[f'init_{key}'] = value
         for key, value in yaml_config['model_config'].items():
             result[f'model_{key}'] = value
-        
-        print(result)
         report.append(result)
         print("-----------------")
     output_dir = f"./log/{dataset}/"

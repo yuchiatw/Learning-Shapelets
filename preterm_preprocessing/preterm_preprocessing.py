@@ -15,7 +15,7 @@ from sklearn.preprocessing import LabelEncoder
 from utils.preprocessing import normalize_data
 
 
-mean_window_size = 4
+mean_window_size = 4 * 2
 seq_min = 15
 padding_min = 3
 step_min = 1
@@ -36,7 +36,7 @@ def preterm_pipeline(
         config = {
             'test_ratio': 0.2,
             'val_ratio': 0.2,
-            'norm_std': 'standard',
+            'norm_std': 'minmax',
             'norm_mode': 'local_before',
         }
     clinical = pd.read_csv(meta_path)
@@ -108,6 +108,7 @@ def preterm_pipeline(
     data['y_train'] = y_train
     data['y_val'] = y_val
     data['y_test'] = y_test
+    print(X_train.shape)
     # Save the dataset to disk
     np.savez(data_path, **data)
     return data
@@ -290,20 +291,26 @@ if __name__ == "__main__":
     config = {
         'test_ratio': 0.2,
         'val_ratio': 0.2,
-        'norm_std': 'standard',
+        'norm_std': 'minmax',
         'norm_mode': 'local_before',
     }
+    # preterm_pipeline(
+    #     config=config, 
+    #     meta_path='./data/filtered_clinical_data_v2.csv',
+    #     strip_path='./data/filtered_strips_data_v2.json',
+    #     data_path='./data/preterm_v2.npz'
+    # )    
     preterm_pipeline(
         config=config, 
         meta_path='./data/filtered_clinical_data_v2.csv',
         strip_path='./data/filtered_strips_data_v2.json',
-        data_path='./data/preterm_v2.npz'
+        data_path='./data/preterm_v4.npz'
     )    
     
-    preterm_pipeline(
-        config=config, 
-        meta_path='./data/filtered_clinical_data.csv',
-        strip_path='./data/filtered_strips_data.json',
-        data_path='./data/preterm.npz'
-    )    
+    # preterm_pipeline(
+    #     config=config, 
+    #     meta_path='./data/filtered_clinical_data.csv',
+    #     strip_path='./data/filtered_strips_data.json',
+    #     data_path='./data/preterm.npz'
+    # )    
     

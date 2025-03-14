@@ -1,6 +1,0 @@
-batch_size: 64
-dataset: robot
-model_path: ./model/best_model_robot_9.pth
-nhead: 4
-num_epochs: 5000
-num_layers: 4

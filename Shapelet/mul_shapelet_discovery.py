@@ -43,8 +43,11 @@ class ShapeletDiscover():
         for i in range(len(self.list_group_ppi)):
             list_ppi = np.concatenate(self.list_group_ppi[i])
             list_group_shapelet = pstsm.find_c_shapelet_non_overlab(list_ppi, number_of_shapelet, p=p, p_inner=pi, len_ts=self.len_of_ts)
+            # sort_list_ppi = np.asarray(list_ppi[list_ppi[:, 3].argsort()]) 
+            # sort_list_ppi = np.asarray(list_ppi[list_ppi[:, 3].argsort()[::-1]])
             list_group_shapelet = np.asarray(list_group_shapelet)
-            list_group_shapelet = list_group_shapelet[list_group_shapelet[:, 1].argsort()]
+            # list_group_shapelet = sort_list_ppi[:number_of_shapelet]
+            # list_group_shapelet = list_group_shapelet[list_group_shapelet[:, 3].argsort()]
             if list_shapelet is None:
                 list_shapelet = list_group_shapelet
             else:

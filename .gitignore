@@ -141,3 +141,4 @@ ua_list.json
 puclic_test/*.csv
 *.yaml
 *.npz
+data/*.npy

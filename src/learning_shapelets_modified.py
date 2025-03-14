@@ -919,7 +919,7 @@ class LearningShapelets:
          # Load best model weights
         if X_val is not None and Y_val is not None:
             self.model.load_state_dict(best_model_wts)
-            return (losses_ce, losses_dist, losses_sim) if self.l2 > 0.0 else (losses_ce, losses_dist), val_losses
+            return (losses_ce, losses_dist, losses_sim), val_losses if self.l2 > 0.0 else (losses_ce, losses_dist), val_losses
         else:
             return losses_ce if not self.use_regularizer else (losses_ce, losses_dist, losses_sim) if self.l2 > 0.0 else (losses_ce, losses_dist)
         # return losses_ce if not self.use_regularizer else (losses_ce, losses_dist, losses_sim) if self.l2 > 0.0 else (

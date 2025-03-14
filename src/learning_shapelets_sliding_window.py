@@ -947,10 +947,15 @@ class LearningShapelets:
             else: 
                 return losses_ce
         elif self.l2 > 0.0:
-            return (losses_ce, losses_dist, losses_sim)  
+            if val_loader is not None:
+                return (losses_ce, losses_dist, losses_sim), best_val_loss
+            else:
+                return (losses_ce, losses_dist, losses_sim)
         else: 
-            
-            return (losses_ce, losses_dist)
+            if val_loader is not None:
+                return (losses_ce, losses_dist), best_val_loss
+            else:
+                return (losses_ce, losses_dist)
     def transform(self, X):
         """
         Performs the shapelet transform with the input time series data x

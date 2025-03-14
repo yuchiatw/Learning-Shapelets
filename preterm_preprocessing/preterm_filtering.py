@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import re
+import argparse
 
 def parse_weekday_format(week_day_str):
     if week_day_str:
@@ -21,10 +22,19 @@ def parse_weekday_format(week_day_str):
             return pd.NaT
     else:
         return pd.NaT
-        
-    
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--filter_mode', default='all', choices=['all', 'last', 'last2'])
+args = parser.parse_args()
+version = {
+    'all': '1', 
+    'last': '2',
+    'last2': '3',
+}
 if __name__ == "__main__":
     print('filtering...')
+    config = args.__dict__
+    print(config)
     model_data = pd.read_csv('../data/processed_clinical_data_duplicate.csv')
     ID_label = pd.read_excel('../data/case controls PTB 02072025.xlsx', sheet_name='Sheet4')
     ID_match = pd.read_excel('../data/case controls PTB 02072025.xlsx', sheet_name='Sheet2')
@@ -52,7 +62,16 @@ if __name__ == "__main__":
         & (linked_data['EncDate_ShiftedDate'] <= linked_data['Delivery_date'])]
     filtered_data = filtered_data.sort_values(by=['Mother_Obfus_MRN', 'EncDate_ShiftedDate'])
     print(filtered_data)
-    filtered_data_keep = filtered_data.loc[filtered_data.groupby('Mother_Obfus_MRN')['EncDate_ShiftedDate'].idxmax()]
+    
+    if config['filter_mode'] == 'all':
+        filtered_data_keep = filtered_data
+    elif config['filter_mode'] == 'last':
+        filtered_data_keep = filtered_data.loc[filtered_data.groupby('Mother_Obfus_MRN')['EncDate_ShiftedDate'].idxmax()]
+    else:
+        filtered_data_keep = filtered_data.groupby('Mother_Obfus_MRN').apply(
+            lambda x: x.nlargest(2, 'EncDate_ShiftedDate').iloc[-1]
+        ).reset_index(drop=True)
+        
     print(filtered_data_keep)
     with open("../data/strips_data.json", "r") as f:
         ua_list = json.load(f)
@@ -70,9 +89,10 @@ if __name__ == "__main__":
     filtered_data_keep = filtered_data_keep.iloc[valid_rows].reset_index(drop=True)
     
     # Save cleaned linked_data as CSV
-    filtered_data_keep.to_csv("../data/filtered_clinical_data_v2.csv", index=False)
+    
+    filtered_data_keep.to_csv(f"../data/filtered_clinical_data_v{version[config['filter_mode']]}.csv", index=False)
     
     # Save cleaned waveform data as JSON
-    with open("../data/filtered_strips_data_v2.json", "w") as f:
+    with open(f"../data/filtered_strips_data_v{version[config['filter_mode']]}.json", "w") as f:
         json.dump(waveform, f)
 

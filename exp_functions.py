@@ -1,10 +1,10 @@
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = "0"
 
-import sys
-sys.path.insert(0, os.path.abspath('../'))
-sys.path.insert(0, os.getcwd())
-
+# import sys
+# sys.path.insert(0, os.path.abspath('../'))
+# sys.path.insert(0, os.getcwd())
+print(f"Executing script at: {os.getcwd()}")
 import numpy as np
 import pandas as pd
 import time
@@ -15,21 +15,23 @@ import glob
 from torch import nn, optim
 from tslearn.clustering import TimeSeriesKMeans
 from sklearn.metrics import log_loss
+from sklearn.preprocessing import StandardScaler
 
 from preterm_preprocessing.preterm_preprocessing import preterm_pipeline
 from public_preprocessing.public_preprocessing import public_pipeline
-
 from Shapelet.mul_shapelet_discovery import ShapeletDiscover
 from src.learning_shapelets import LearningShapelets as LearningShapeletsFCN
 from src.learning_shapelets_sliding_window import LearningShapelets as LearningShapeletsTranformer
-from src.vanilla_transformer import TimeSeriesTransformer
-from src.joint_training import MultiBranch
+from src.vanilla_transformer import Vanilla
+from src.fe_shape_joint import JointTraining
 from pyts.classification import BOSSVS # only univariate format
-
+from src.fe_shape_joint import feature_extraction_selection, extraction_pipeline
+from numpy.lib.stride_tricks import sliding_window_view
+import tsfel
 from utils.evaluation_and_save import eval_results, save_results_to_csv
 
 def shapelet_initialization(
-    X_train, y_train, config, dataset='preterm', mode='pips'
+    X_train, y_train, config, num_classes=2, dataset='preterm', mode='pips', version=''
 ):
     _, n_channels, len_ts = X_train.shape
     if mode=='pips':
@@ -39,9 +41,12 @@ def shapelet_initialization(
         num_shapelets_make = config['num_shapelets_make']
         num_shapelets=config['num_shapelets']
         
-        
-        if os.path.exists(f'./data/list_shapelets_meta_{dataset}_{ws_rate}_{num_pip}_{num_shapelets_make}.csv'):
-            df_shapelets_meta = pd.read_csv(f'./data/list_shapelets_meta_{dataset}_{ws_rate}_{num_pip}_{num_shapelets_make}.csv')
+        csv_path = f'./data/list_shapelets_meta_{dataset}_{ws_rate}_{num_pip}_{num_shapelets_make}.csv'
+        if (len(version) > 0):
+            csv_path = f'./data/list_shapelets_meta_{dataset}_{ws_rate}_{num_pip}_{num_shapelets_make}_v{version}.csv'
+        print(csv_path)
+        if os.path.exists(csv_path):
+            df_shapelets_meta = pd.read_csv(csv_path)
             if num_shapelets > len(df_shapelets_meta):
                 list_shapelets_meta = df_shapelets_meta.values
             else:
@@ -53,15 +58,26 @@ def shapelet_initialization(
             shape.extract_candidate(X_train)
             shape.discovery(X_train, y_train)
             list_shapelets_meta = shape.get_shapelet_info(number_of_shapelet=num_shapelets_make)
+            list_shapelets_meta = list_shapelets_meta[list_shapelets_meta[:, 3].argsort()[::-1]]
             print(time.time() - t1)
-        
-            df_shapelets_meta = pd.DataFrame(list_shapelets_meta, columns=['series_position', 'start_pos', 'end_pos', 'inforgain', 'label', 'dim'])
-            df_shapelets_meta.to_csv(f'./data/list_shapelets_meta_{dataset}_{ws_rate}_{num_pip}_{num_shapelets_make}.csv', index=False)
-            if num_shapelets > len(df_shapelets_meta):
-                list_shapelets_meta = df_shapelets_meta.values
-            else:
-                list_shapelets_meta = df_shapelets_meta.values[:num_shapelets]
-        
+    
+        df_shapelets_meta = pd.DataFrame(list_shapelets_meta, columns=['series_position', 'start_pos', 'end_pos', 'inforgain', 'label', 'dim'])
+        df_shapelets_meta.to_csv(csv_path, index=False)
+        if num_shapelets > len(df_shapelets_meta):
+            list_shapelets_meta = df_shapelets_meta.values
+        else:
+            every = int(num_shapelets/num_classes)
+            list_shapelets_meta = df_shapelets_meta.values[:num_shapelets]
+            # list_shapelets_meta = np.zeros((num_shapelets, 6))
+            
+            # for c in range(num_classes):
+            #     class_shapelets = df_shapelets_meta[df_shapelets_meta['label'] == c].values
+            #     if len(class_shapelets) > every:
+            #         list_shapelets_meta[c * every:(c + 1) * every] = df_shapelets_meta.values[:every]
+            #     else:
+            #         list_shapelets_meta[c * every:c * every + len(class_shapelets)] = class_shapelets
+            # list_shapelets_meta = df_shapelets_meta.values[:num_shapelets]
+            
         list_shapelets = {}
         for i in range(list_shapelets_meta.shape[0] if list_shapelets_meta is not None else 0):
             shape_size = int(list_shapelets_meta[i, 2] - int(list_shapelets_meta[i, 1]))
@@ -124,17 +140,20 @@ def train_ls(
     loss_func = nn.CrossEntropyLoss()
     
     num_classes = len(set(y_train))
-    if model_mode == 'LT_FCN':
+    if model_mode == 'LS_FCN':
         model = LearningShapeletsFCN(
             loss_func=loss_func,
             shapelets_size_and_len=shapelets_size_and_len, 
             in_channels=n_channels, 
             num_classes=num_classes,
+            k=config['k'],
+            l1=config['l1'],
+            l2=config['l2'],
             to_cuda=True,
             verbose=1,
-            dist_measure='euclidean'
+            dist_measure='euclidean',
         )
-    elif model_mode == 'LT_Transformer':
+    elif model_mode == 'LS_Transformer':
         window_size = max(shapelets_size_and_len.keys())
         model = LearningShapeletsTranformer(
             shapelets_size_and_len=shapelets_size_and_len,
@@ -142,25 +161,107 @@ def train_ls(
             seq_len=len_ts,
             in_channels=n_channels,
             num_classes=num_classes,
+            k=config['k'],
+            l1=config['l1'],
+            l2=config['l2'],
             window_size=window_size,
             step=config['step'], 
             verbose=1,
             to_cuda=True
         )
+
     elif model_mode == 'JOINT':
         window_size = max(shapelets_size_and_len.keys())
-        model = MultiBranch(
+        if dataset == 'preterm': 
+            window_size = window_size
+        window_step = config['step']
+        if os.path.exists(f'./data/{dataset}_X_train_split_filtered_{window_size}_{window_step}.npy'):
+            X_train_split_filtered = np.load(f'./data/{dataset}_X_train_split_filtered_{window_size}_{window_step}.npy')
+            X_val_split_filtered = np.load(f'./data/{dataset}_X_val_split_filtered_{window_size}_{window_step}.npy')
+            X_test_split_filtered = np.load(f'./data/{dataset}_X_test_split_filtered_{window_size}_{window_step}.npy')
+        else:
+            x_train = X_train.transpose(0, 2, 1)
+            x_val = X_val.transpose(0, 2, 1)
+            x_test = X_test.transpose(0, 2, 1)
+            num_train, len_ts, in_channels = x_train.shape
+            num_val = x_val.shape[0]
+            num_test = x_test.shape[0]
+            x_train_split = sliding_window_view(x_train, window_size, axis=1).transpose(0, 1, 3, 2)[:, ::window_step]
+            x_val_split = sliding_window_view(x_val, window_size, axis=1).transpose(0, 1, 3, 2)[:, ::window_step]
+            x_test_split = sliding_window_view(x_test, window_size, axis=1).transpose(0, 1, 3, 2)[:, ::window_step]
+            num_windows = x_test_split.shape[1]
+            x_train_split = x_train_split.reshape(num_train * num_windows, window_size, in_channels)
+            x_val_split = x_val_split.reshape(num_val * num_windows, window_size, in_channels)
+            x_test_split = x_test_split.reshape(num_test * num_windows, window_size, in_channels)
+            cfg_file = tsfel.get_features_by_domain()
+            if dataset == 'preterm':
+                clean_selected_features = ['Average power', 'ECDF Percentile Count', 
+                    'LPCC', 'LPCC', 'LPCC', 'LPCC', 'LPCC', 
+                    'Median', 'Root mean square', 'Spectral distance', 
+                    'Spectral roll-off', 'Spectral skewness', 'Spectral slope', \
+                    'Spectral spread', 'Standard deviation', 'Sum absolute diff', 
+                    'Wavelet absolute mean_25.0Hz', 'Wavelet absolute mean_3.12Hz', 
+                    'Wavelet absolute mean_3.57Hz', 'Wavelet absolute mean_4.17Hz', 
+                    'Wavelet absolute mean_5.0Hz', 'Wavelet absolute mean_6.25Hz', 
+                    'Wavelet absolute mean_8.33Hz', 'Wavelet energy_25.0Hz', 'Wavelet energy_3.12Hz', 
+                    'Wavelet energy_3.57Hz', 'Wavelet energy_4.17Hz', 'Wavelet energy_5.0Hz', 
+                    'Wavelet energy_6.25Hz', 'Wavelet energy_8.33Hz', 'Wavelet standard deviation_12.5Hz', 
+                    'Wavelet standard deviation_2.78Hz', 'Wavelet standard deviation_25.0Hz', 'Wavelet standard deviation_3.12Hz', 
+                    'Wavelet standard deviation_3.57Hz', 'Wavelet standard deviation_4.17Hz', 'Wavelet standard deviation_5.0Hz', 
+                    'Wavelet standard deviation_6.25Hz', 'Wavelet standard deviation_8.33Hz', 'Wavelet variance_2.78Hz', 
+                    'Wavelet variance_3.12Hz', 'Wavelet variance_3.57Hz', 'Wavelet variance_4.17Hz', 'Wavelet variance_5.0Hz', 
+                    'Wavelet variance_6.25Hz', 'Wavelet variance_8.33Hz'
+                ]
+                # Disable all features in cfg_file first
+                for domain in cfg_file.keys():
+                    for feature in cfg_file[domain]:
+                        cfg_file[domain][feature]["use"] = "no"  # Ensure correct format
+
+                # Enable only the selected features
+                for domain in cfg_file.keys():
+                    for feature in cfg_file[domain]:
+                        if feature in clean_selected_features:
+                            cfg_file[domain][feature]["use"] =  "yes"
+                X_train_split_filtered = tsfel.time_series_features_extractor(cfg_file, x_train_split)
+                X_val_split_filtered = tsfel.time_series_features_extractor(cfg_file, x_val_split)
+                X_test_split_filtered = tsfel.time_series_features_extractor(cfg_file, x_test_split)
+                scaler = StandardScaler()
+                X_train_split_filtered = scaler.fit_transform(X_train_split_filtered.values)
+                X_val_split_filtered = scaler.transform(X_val_split_filtered.values)
+                X_test_split_filtered = scaler.transform(X_test_split_filtered.values)
+                X_train_split_filtered = X_train_split_filtered.reshape(num_train, num_windows, -1)
+                X_val_split_filtered = X_val_split_filtered.reshape(num_val, num_windows, -1)
+                X_test_split_filtered = X_test_split_filtered.reshape(num_test, num_windows, -1)
+            else:
+                X_train_split = tsfel.time_series_features_extractor(cfg_file, x_train_split)
+                X_val_split = tsfel.time_series_features_extractor(cfg_file, x_val_split)
+                X_test_split = tsfel.time_series_features_extractor(cfg_file, x_test_split)
+                X_train_split_filtered, corr_features, selector, scaler = feature_extraction_selection(X_train_split)
+                X_val_split_filtered = extraction_pipeline(X_val_split, corr_features, selector, scaler)
+                X_test_split_filtered = extraction_pipeline(X_test_split, corr_features, selector, scaler)
+                X_train_split_filtered = X_train_split_filtered.reshape(num_train, num_windows, -1)
+                X_val_split_filtered = X_val_split_filtered.reshape(num_val, num_windows, -1)
+                X_test_split_filtered = X_test_split_filtered.reshape(num_test, num_windows, -1)
+            np.save(f'./data/{dataset}_X_train_split_filtered_{window_size}_{window_step}.npy', X_train_split_filtered)
+            np.save(f'./data/{dataset}_X_val_split_filtered_{window_size}_{window_step}.npy', X_val_split_filtered)
+            np.save(f'./data/{dataset}_X_test_split_filtered_{window_size}_{window_step}.npy', X_test_split_filtered)
+        
+        num_features = X_train_split_filtered.shape[-1]
+        print(num_features)
+    
+        model = JointTraining(
             shapelets_size_and_len=shapelets_size_and_len,
-            loss_func=loss_func,
-            seq_len=len_ts,
-            in_channels=n_channels,
-            num_classes=num_classes,
-            window_size=window_size,
-            step=config['step'], 
-            nhead=config['nhead'],
+            seq_len=len_ts, 
+            in_channels=n_channels, 
+            loss_func = loss_func, 
+            mode = config['joint_mode'], 
+            num_features=num_features, 
+            window_size=window_size, 
+            step=config['step'],
+            nhead=config['nhead'], 
             num_layers=config['num_layers'],
-            verbose=1,
-            to_cuda=True
+            num_classes=num_classes, 
+            to_cuda = True
         )
     if init_mode == 'pips':
         for i, key in enumerate(list_shapelets.keys() if list_shapelets is not None else [0, 0]):
@@ -178,60 +279,42 @@ def train_ls(
     model_path = config['model_path']
     optimizer = optim.Adam(model.model.parameters(), lr=config['lr'], weight_decay=config['wd'], eps=config['epsilon'])
     model.set_optimizer(optimizer)
-    loss, val_loss = model.fit(
-        X_train, y_train, X_val=X_val, Y_val=y_val, 
-        epochs=config['epochs'], batch_size=config['batch_size'],
-        model_path=model_path
-    )
+    if model_mode == 'LS_FCN' or model_mode == 'LS_Transformer':
+        loss = model.fit(
+            X_train, y_train, X_val=X_val, Y_val=y_val, shuffle=config['shuffle'],
+            epochs=config['epochs'], batch_size=config['batch_size'],
+            model_path=model_path
+        )
+    elif model_mode == 'JOINT':
+        loss =  model.fit(
+            X_train, X_train_split_filtered, y_train,
+            X_val=data['X_val'], FE_val = X_val_split_filtered, Y_val=y_val,
+            epochs=config['epochs'],
+            batch_size=config['batch_size'],
+            shuffle=True, 
+            model_path= model_path
+        )
+        
     elapsed = time.time() - t1
     if os.path.exists(model_path):
-        if model_mode == 'LT_FCN':
-            model = LearningShapeletsFCN(
-                loss_func=loss_func,
-                shapelets_size_and_len=shapelets_size_and_len, 
-                in_channels=n_channels, 
-                num_classes=num_classes,
-                to_cuda=True,
-                verbose=1,
-                dist_measure='euclidean'
-            )
-        elif model_mode == 'LT_Transformer':
-            model = LearningShapeletsTranformer(
-                shapelets_size_and_len=shapelets_size_and_len,
-                loss_func=loss_func,
-                seq_len=len_ts,
-                in_channels=n_channels,
-                num_classes=num_classes,
-                window_size=window_size,
-                step=config['step'], 
-                verbose=1,
-                to_cuda=True,
-            )
-        elif model_mode == 'JOINT':
-            model = MultiBranch(
-            shapelets_size_and_len=shapelets_size_and_len,
-            loss_func=loss_func,
-            seq_len=len_ts,
-            in_channels=n_channels,
-            num_classes=num_classes,
-            window_size=window_size,
-            step=config['step'], 
-            verbose=1,
-            to_cuda=True
-        )
         model.load_model(model_path)
-    y_hat = model.predict(X_test)
+    if model_mode == 'JOINT':
+        y_hat = model.predict(X_test, FE = X_test_split_filtered)
+    else:
+        y_hat = model.predict(X_test)
     results = eval_results(y_test, y_hat)
 
-    return elapsed, results, val_loss
+    return elapsed, results, loss[-1]
 def update_config(default_config, yaml_config):
     for key, value in yaml_config.items():
         if isinstance(value, dict) and key in default_config:
             update_config(default_config[key], value)  # Recursive update for nested dictionaries
         elif key in default_config:
             default_config[key] = value  # Update only existing keys
-
-def exp(config, datatype = 'private', dataset='preterm', store_results = False, version: int = 0):
+def store_data(data, model):
+    
+    
+def exp(config, datatype = 'private', dataset='preterm', store_results = False, version: str = ""):
     '''
     Return: 
     - elapsed: time spent for training
@@ -242,7 +325,7 @@ def exp(config, datatype = 'private', dataset='preterm', store_results = False, 
     data_path = data_path = os.path.join('./data', f'{dataset}.npz')
     meta_path='./data/filtered_clinical_data.csv'
     strip_path='./data/filtered_strips_data.json'
-    if version > 0 and datatype == 'private':
+    if len(version) > 0 and datatype == 'private':
         data_path = os.path.join('./data', f'{dataset}_v{version}.npz')
         meta_path=f'./data/filtered_clinical_data_v{version}.csv'
         strip_path=f'./data/filtered_strips_data_v{version}.json' 
@@ -282,13 +365,18 @@ def exp(config, datatype = 'private', dataset='preterm', store_results = False, 
     
     _, n_channels, len_ts = X_train.shape
     num_classes = len(set(y_train))
-    if config['model_mode'] == 'LT_FCN' \
-        or config['model_mode'] == 'LT_Transformer' \
+    if config['model_mode'] == 'LS_FCN' \
+        or config['model_mode'] == 'LS_Transformer' \
             or config['model_mode'] == 'JOINT':
         if config['init_mode'] == 'pips':
             print(config)
             shapelets_size_and_len, list_shapelets_meta, list_shapelets =\
-                shapelet_initialization(X_train, y_train, config['init_config'], config['init_mode'])
+                shapelet_initialization(X_train, y_train, 
+                                        config=config['init_config'], 
+                                        dataset=dataset, 
+                                        num_classes=num_classes,
+                                        mode=config['init_mode'], 
+                                        version=version)
             elapsed, results, val_loss = train_ls(
                 data,
                 shapelets_size_and_len=shapelets_size_and_len,
@@ -326,21 +414,46 @@ def exp(config, datatype = 'private', dataset='preterm', store_results = False, 
         y_pred = clf.predict(X_test)
         val_loss = log_loss(y_val, y_val_pred)
         results = eval_results(y_test, y_pred)
-    return elapsed, results, val_loss
         
-    # elif config['model_mode'] == 'vanilla':
-    #     model_config = config['model_config']
-    #     model = TimeSeriesTransformer(
-    #         seq_len=len_ts, 
-    #         num_classes=num_classes,
-    #         channels=n_channels,
-    #         d_model=model_config['d_model'], 
-    #         nhead=model_config['nhead'],
-    #         num_layers=model_config['num_layers'],
-    #         to_cuda=True            
-    #     )
+    elif config['model_mode'] == 'vanilla':
+        model_config = config['model_config']
+        loss_func = nn.CrossEntropyLoss()
+        model = Vanilla(
+            loss_func=loss_func,
+            seq_len=len_ts,
+            num_classes=num_classes,
+            channels=n_channels,
+            num_layers=model_config['num_layers'],
+            nhead=model_config['nhead'],
+            d_model=model_config['d_model'],
+            batch_first=True,
+            to_cuda=True
+        )
+        optimizer = optim.Adam(
+            model.model.parameters(), 
+            lr=model_config['lr'], 
+            weight_decay=model_config['wd'], 
+            eps=model_config['epsilon']
+        )
+        model.set_optimizer(optimizer=optimizer)
+        loss_list, val_loss = model.fit(
+            X_train, y_train,
+            X_val=X_val, Y_val=y_val,
+            epochs=model_config['epochs'],
+            batch_size=model_config['batch_size'],
+            shuffle=True, 
+            model_path=model_config['model_path']
+        )
+        model.load_model(model_config['model_path'])
+        y_pred = model.predict(X_test)
+        results = eval_results(y_test, y_pred)
+
+    return elapsed, results, val_loss
+    
 
 if __name__=='__main__':
+    datatype = 'private'
+    dataset = 'preterm'
     # configuration loading
     config = { # default
         'data_loading': {
@@ -353,33 +466,36 @@ if __name__=='__main__':
             'step_min': 1,
         },
         'init_mode': 'pips',
-        'model_mode': 'JOINT',
+        'model_mode': 'LS_FCN',
         'init_config': {
             'ws_rate': 0.1,
             'num_pip': 0.1, 
             'num_shapelets_make': 100, 
             'num_shapelets': 10,
-            
         },
         # 'init_config': {
         #     'size_ratio': [0.1, 0.2], 
         #     'num_shapelets': 10
         # },
         'model_config': {
-            'epochs': 200, 
-            'batch_size': 32, 
-            'model_path': './model/best_model',
-            'step': 1,
+            'epochs': 2000, 
+            'batch_size': 256, 
+            'model_path': f'./model/best_model_{dataset}_300.pth',
+            'joint_mode': 'concat', # concat / fusion
+            'step': 10,
             'lr': 1e-3, 
             'wd': 1e-4, 
+            'nhead': 2, 
+            'num_layers': 2, 
             'epsilon': 1e-7,
-            'nhead': 2,
-            'num_layers':2, 
+            'shuffle': False,
+            'k': 0,
+            'l1': 0,
+            'l2': 0
         },
     }
 
-    datatype = 'private'
-    dataset = 'preterm'
+    
     report = []
     yaml_files = glob.glob("./preterm/yaml_JOINT/*.yaml")
     for config_path in yaml_files:
@@ -390,7 +506,6 @@ if __name__=='__main__':
                 #     update_config(config, yaml_config)  # Update the config
         except FileNotFoundError:
             print(f"Warning: {config_path} not found. Using default config.")
-    
     yaml_config = config
     for k in range(1):
         acc_list = []
@@ -401,14 +516,14 @@ if __name__=='__main__':
         elapsed_list = []
         for j in range(10):
             elapsed, results, val_loss = \
-                exp(yaml_config, datatype=datatype, dataset=dataset)
+                exp(yaml_config, datatype=datatype, dataset=dataset, version='3')
             acc_list.append(results['accuracy'])
             precision_list.append(results['precision'])
             f1_list.append(results['f1_score'])
             recall_list.append(results['recall'])
             val_loss_list.append(val_loss)
             elapsed_list.append(elapsed)
-        
+            print(results)
         avg_acc = sum(acc_list) / len(acc_list)
         avg_prec = sum(precision_list) / len(precision_list)
         avg_f1 = sum(f1_list) / len(f1_list)
@@ -434,8 +549,8 @@ if __name__=='__main__':
         result['model_mode'] = yaml_config['model_mode']
         for key, value in yaml_config['data_loading'].items():
             result[f'data_{key}'] = value
-        # for key, value in yaml_config['init_config'].items():
-        #     result[f'init_{key}'] = value
+        for key, value in yaml_config['init_config'].items():
+            result[f'init_{key}'] = value
         for key, value in yaml_config['model_config'].items():
             result[f'model_{key}'] = value
         report.append(result)

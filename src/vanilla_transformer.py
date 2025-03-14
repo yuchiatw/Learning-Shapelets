@@ -136,8 +136,6 @@ class Vanilla:
         batch_size=256, 
         shuffle=False, 
         drop_last=False, 
-        patience=10, 
-        min_delta=1e-6,
         model_path="./best_model.pth",
     ):
         
@@ -239,9 +237,11 @@ class Vanilla:
         
         return result
 
-        print("Loss:", loss.item())
     def load_model(self, model_path='./model/best_model.pth'):
         self.model.load_state_dict((torch.load(model_path, weights_only=True)))
+
+        
+        
 # ---------------------- Usage Example ----------------------
 if __name__ == "__main__":
     # Hyperparameters

@@ -10,7 +10,7 @@ combinations = list(itertools.product(
         epochs, batch_size
     ))
 
-output_dir = './yaml_LT_pips'
+output_dir = './yaml_LS_pips'
 os.makedirs(output_dir, exist_ok=True)
 
 base_config = {
@@ -24,7 +24,7 @@ base_config = {
         'step_min': 1,
     },
     'init_mode': 'pips',
-    'model_mode': 'LT_Transformer',
+    'model_mode': 'LS_Transformer',
     'init_config': {
         'ws_rate': 0.1,
         'num_pip': 0.1, 
