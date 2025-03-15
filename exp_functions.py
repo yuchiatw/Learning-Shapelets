@@ -29,6 +29,29 @@ from src.fe_shape_joint import feature_extraction_selection, extraction_pipeline
 from numpy.lib.stride_tricks import sliding_window_view
 import tsfel
 from utils.evaluation_and_save import eval_results, save_results_to_csv
+import torch
+import json
+def torch_dist_ts_shapelet(ts, shapelet, cuda=True):
+    """
+    Calculate euclidean distance of shapelet to a time series via PyTorch and returns the distance along with the position in the time series.
+    """
+    if not isinstance(ts, torch.Tensor):
+        ts = torch.tensor(ts, dtype=torch.float)
+    if not isinstance(shapelet, torch.Tensor):
+        shapelet = torch.tensor(shapelet, dtype=torch.float)
+    if cuda:
+        ts = ts.cuda()
+        shapelet = shapelet.cuda()
+    shapelet = torch.unsqueeze(shapelet, 0)
+    # unfold time series to emulate sliding window
+    ts = ts.unfold(2, shapelet.shape[2], 1).contiguous()
+    # calculate euclidean distance
+    dists = torch.cdist(ts, shapelet, p=2)
+    dists = torch.sum(dists, dim=1)
+    # otherwise gradient will be None
+    # hard min compared to soft-min from the paper
+    d_min, d_argmin = torch.min(dists, 1)
+    return (d_min.cpu().detach().numpy(), d_argmin.cpu().detach().numpy())
 
 def shapelet_initialization(
     X_train, y_train, config, num_classes=2, dataset='preterm', mode='pips', version=''
@@ -45,21 +68,21 @@ def shapelet_initialization(
         if (len(version) > 0):
             csv_path = f'./data/list_shapelets_meta_{dataset}_{ws_rate}_{num_pip}_{num_shapelets_make}_v{version}.csv'
         print(csv_path)
-        if os.path.exists(csv_path):
-            df_shapelets_meta = pd.read_csv(csv_path)
-            if num_shapelets > len(df_shapelets_meta):
-                list_shapelets_meta = df_shapelets_meta.values
-            else:
-                list_shapelets_meta = df_shapelets_meta.values[:num_shapelets]
+        # if os.path.exists(csv_path):
+        #     df_shapelets_meta = pd.read_csv(csv_path)
+        #     if num_shapelets > len(df_shapelets_meta):
+        #         list_shapelets_meta = df_shapelets_meta.values
+        #     else:
+        #         list_shapelets_meta = df_shapelets_meta.values[:num_shapelets]
             
-        else:
-            t1 = time.time()
-            shape = ShapeletDiscover(window_size=int(len_ts*ws_rate),num_pip=num_pip)
-            shape.extract_candidate(X_train)
-            shape.discovery(X_train, y_train)
-            list_shapelets_meta = shape.get_shapelet_info(number_of_shapelet=num_shapelets_make)
-            list_shapelets_meta = list_shapelets_meta[list_shapelets_meta[:, 3].argsort()[::-1]]
-            print(time.time() - t1)
+        # else:
+        t1 = time.time()
+        shape = ShapeletDiscover(window_size=int(len_ts*ws_rate),num_pip=num_pip)
+        shape.extract_candidate(X_train)
+        shape.discovery(X_train, y_train)
+        list_shapelets_meta = shape.get_shapelet_info(number_of_shapelet=num_shapelets_make)
+        list_shapelets_meta = list_shapelets_meta[list_shapelets_meta[:, 3].argsort()[::-1]]
+        print(time.time() - t1)
     
         df_shapelets_meta = pd.DataFrame(list_shapelets_meta, columns=['series_position', 'start_pos', 'end_pos', 'inforgain', 'label', 'dim'])
         df_shapelets_meta.to_csv(csv_path, index=False)
@@ -120,7 +143,85 @@ def get_weights_via_kmeans(X, shapelets_size, num_shapelets, n_segments=1000):
     k_means = TimeSeriesKMeans(n_clusters=num_shapelets, metric="euclidean", max_iter=50).fit(segments)
     clusters = k_means.cluster_centers_.transpose(0, 2, 1)
     return clusters
+def store_data(data, dataset, model, list_shapelets_meta, list_shapelets):
+    X_train = data['X_train']
+    X_val = data['X_val']
+    X_test = data['X_test']
+    y_train = data['y_train']
+    y_val = data['y_val']
+    y_test = data['y_test']
+    
+    X_all = np.concatenate((X_train, X_val, X_test), axis=0)
+    y_all = np.concatenate((y_train, y_val, y_test), axis=0)
+    shapelets = model.get_shapelets()
+    i = 0
+    output_shapelet = []
+    for key in sorted(list_shapelets.keys()):
+        for idx in list_shapelets[key]:
+            shape_len = int(key)
+            wave = shapelets[i, :, :shape_len]
+            shape_info = {
+                'len': shape_len,
+                'gain': list_shapelets_meta[idx, 3],
+                'wave': shapelets[i, :, :shape_len]
+            }
+            i += 1
+            output_shapelet.append(shape_info)
+    
+    match_position = []
+    min_distance = []
+    for i in range(len(output_shapelet)):
+        
+        d_min, pos_start = torch_dist_ts_shapelet(X_all, output_shapelet[i]['wave'])
+        pos_end = np.zeros(pos_start.shape)
+        pos_end = pos_start + output_shapelet[i]['len']
+        pos = np.concatenate((pos_start, pos_end), axis=1)
+        pos = np.expand_dims(pos, 0)
+        match_position.append(pos)
+        min_distance.append(d_min)
+    
+    match_position = np.concatenate(match_position)
+    min_distance = np.concatenate(min_distance, axis=1)
+    print(min_distance.shape)
+    match_position = np.transpose(match_position, (1, 0, 2))
+    
+    
+    # Sort match_position based on output_shapelet['gain'] on axis 1
+    gains = np.array([shapelet['gain'] for shapelet in output_shapelet])
+    sorted_indices = np.argsort(gains)[::-1]
+    match_position = match_position[:, sorted_indices, :]
+    min_distance = min_distance[:, sorted_indices]
+    
+    match_position_start = match_position[:, :, 0].reshape(match_position.shape[0], match_position.shape[1])
+    match_position_end = match_position[:, :, 1].reshape(match_position.shape[0], match_position.shape[1])
+    # Sort output_shapelet based on 'gain'
+    output_shapelet = sorted(output_shapelet, key=lambda x: x['gain'], reverse=True)
+    output_dir = f"./data/{dataset}"
+    
+    os.makedirs(output_dir, exist_ok=True)
+    min_distance_df = pd.DataFrame(min_distance)
+    min_distance_df.to_csv(os.path.join(output_dir, "shapelet_transform.csv"), index=False)
+    X_all_df = pd.DataFrame(X_all.reshape(X_all.shape[0], -1))
+    X_all_df.to_csv(os.path.join(output_dir, "X_train.csv"), index=False)
+    y_all_df = pd.DataFrame(y_all, columns=['label'])
+    y_all_df.to_csv(os.path.join(output_dir, "label.csv"), index=False)
+    match_start_df = pd.DataFrame(match_position_start)
+    match_start_df.to_csv(os.path.join(output_dir, "match_start.csv"), index=False)
+    match_end_df = pd.DataFrame(match_position_end)
+    match_end_df.to_csv(os.path.join(output_dir, "match_end.csv"), index=False)
+    output_shapelet_json = [
+        {
+            'len': shapelet['len'],
+            'gain': shapelet['gain'],
+            'wave': shapelet['wave'].tolist()
+        }
+        for shapelet in output_shapelet
+    ]
 
+    with open(os.path.join(output_dir, "output_shapelet.json"), 'w') as f:
+        json.dump(output_shapelet_json, f)
+    
+    
 def train_ls(
     data: dict, 
     shapelets_size_and_len: dict, 
@@ -128,6 +229,8 @@ def train_ls(
     model_mode: str, 
     list_shapelets: dict = {}, 
     list_shapelets_meta: np.ndarray = np.zeros(10), 
+    store_results = False, 
+    dataset = 'ECG200', 
     config={}
 ):
     X_train = data['X_train']
@@ -303,7 +406,8 @@ def train_ls(
     else:
         y_hat = model.predict(X_test)
     results = eval_results(y_test, y_hat)
-
+    if store_results:
+        store_data(data, dataset, model, list_shapelets_meta, list_shapelets)
     return elapsed, results, loss[-1]
 def update_config(default_config, yaml_config):
     for key, value in yaml_config.items():
@@ -311,7 +415,7 @@ def update_config(default_config, yaml_config):
             update_config(default_config[key], value)  # Recursive update for nested dictionaries
         elif key in default_config:
             default_config[key] = value  # Update only existing keys
-def store_data(data, model):
+
     
     
 def exp(config, datatype = 'private', dataset='preterm', store_results = False, version: str = ""):
@@ -377,7 +481,7 @@ def exp(config, datatype = 'private', dataset='preterm', store_results = False, 
                                         num_classes=num_classes,
                                         mode=config['init_mode'], 
                                         version=version)
-            elapsed, results, val_loss = train_ls(
+            final_results = train_ls(
                 data,
                 shapelets_size_and_len=shapelets_size_and_len,
                 list_shapelets=list_shapelets,
@@ -385,7 +489,12 @@ def exp(config, datatype = 'private', dataset='preterm', store_results = False, 
                 init_mode='pips',
                 model_mode=config['model_mode'],
                 config=config['model_config'],
+                store_results=store_results, 
+                dataset=dataset
             )
+            elapsed = final_results[0]
+            results = final_results[1]
+            val_loss = final_results[2]
         else:
             shapelets_size_and_len = shapelet_initialization(X_train, y_train, config['init_config'], config['init_mode'] )
             elapsed, results, val_loss = train_ls(
@@ -447,13 +556,15 @@ def exp(config, datatype = 'private', dataset='preterm', store_results = False, 
         model.load_model(model_config['model_path'])
         y_pred = model.predict(X_test)
         results = eval_results(y_test, y_pred)
-
+        
+   
+    
     return elapsed, results, val_loss
     
 
 if __name__=='__main__':
-    datatype = 'private'
-    dataset = 'preterm'
+    datatype = 'public'
+    dataset = 'ECG200'
     # configuration loading
     config = { # default
         'data_loading': {
@@ -469,7 +580,7 @@ if __name__=='__main__':
         'model_mode': 'LS_FCN',
         'init_config': {
             'ws_rate': 0.1,
-            'num_pip': 0.1, 
+            'num_pip': 0.2, 
             'num_shapelets_make': 100, 
             'num_shapelets': 10,
         },
@@ -479,11 +590,11 @@ if __name__=='__main__':
         # },
         'model_config': {
             'epochs': 2000, 
-            'batch_size': 256, 
+            'batch_size': 64, 
             'model_path': f'./model/best_model_{dataset}_300.pth',
             'joint_mode': 'concat', # concat / fusion
             'step': 10,
-            'lr': 1e-3, 
+            'lr': 5e-3, 
             'wd': 1e-4, 
             'nhead': 2, 
             'num_layers': 2, 
@@ -507,54 +618,56 @@ if __name__=='__main__':
         except FileNotFoundError:
             print(f"Warning: {config_path} not found. Using default config.")
     yaml_config = config
-    for k in range(1):
-        acc_list = []
-        f1_list = []
-        recall_list = []
-        precision_list = []
-        val_loss_list = []
-        elapsed_list = []
-        for j in range(10):
-            elapsed, results, val_loss = \
-                exp(yaml_config, datatype=datatype, dataset=dataset, version='3')
-            acc_list.append(results['accuracy'])
-            precision_list.append(results['precision'])
-            f1_list.append(results['f1_score'])
-            recall_list.append(results['recall'])
-            val_loss_list.append(val_loss)
-            elapsed_list.append(elapsed)
-            print(results)
-        avg_acc = sum(acc_list) / len(acc_list)
-        avg_prec = sum(precision_list) / len(precision_list)
-        avg_f1 = sum(f1_list) / len(f1_list)
-        avg_recall = sum(recall_list) / len(recall_list)
-        avg_loss = sum(val_loss_list) / len(val_loss_list)
-        avg_elapsed = sum(elapsed_list) / len(elapsed_list)
+    elapsed, results, val_loss = \
+            exp(yaml_config, datatype=datatype, dataset=dataset, version='3', store_results=True)
+    # for k in range(1):
+    #     acc_list = []
+    #     f1_list = []
+    #     recall_list = []
+    #     precision_list = []
+    #     val_loss_list = []
+    #     elapsed_list = []
+    #     for j in range(10):
+    #         elapsed, results, val_loss = \
+    #             exp(yaml_config, datatype=datatype, dataset=dataset, version='3')
+    #         acc_list.append(results['accuracy'])
+    #         precision_list.append(results['precision'])
+    #         f1_list.append(results['f1_score'])
+    #         recall_list.append(results['recall'])
+    #         val_loss_list.append(val_loss)
+    #         elapsed_list.append(elapsed)
+    #         print(results)
+    #     avg_acc = sum(acc_list) / len(acc_list)
+    #     avg_prec = sum(precision_list) / len(precision_list)
+    #     avg_f1 = sum(f1_list) / len(f1_list)
+    #     avg_recall = sum(recall_list) / len(recall_list)
+    #     avg_loss = sum(val_loss_list) / len(val_loss_list)
+    #     avg_elapsed = sum(elapsed_list) / len(elapsed_list)
 
-        print(f"Average accuracy: {avg_acc}")
-        print(f"Average precision: {avg_prec}")
-        print(f"Average f1-score: {avg_f1}")
-        print(f"Average recall score: {avg_recall}")
-        print(f"Average validation loss: {avg_loss}")
+    #     print(f"Average accuracy: {avg_acc}")
+    #     print(f"Average precision: {avg_prec}")
+    #     print(f"Average f1-score: {avg_f1}")
+    #     print(f"Average recall score: {avg_recall}")
+    #     print(f"Average validation loss: {avg_loss}")
 
-        result = {
-            'avg_accuracy': avg_acc,
-            'avg_f1': avg_f1,
-            'avg_recall': avg_recall,
-            'avg_precision': avg_prec,
-            'avg_val_loss': avg_loss,
-            'elapsed_time': avg_elapsed
-        }
-        # result['init_mode'] = config['init_mode']
-        result['model_mode'] = yaml_config['model_mode']
-        for key, value in yaml_config['data_loading'].items():
-            result[f'data_{key}'] = value
-        for key, value in yaml_config['init_config'].items():
-            result[f'init_{key}'] = value
-        for key, value in yaml_config['model_config'].items():
-            result[f'model_{key}'] = value
-        report.append(result)
-        print("-----------------")
-    output_dir = f"./log/{dataset}"
-    os.makedirs(output_dir, exist_ok=True)
-    save_results_to_csv(report, filename=os.path.join(output_dir, 'JOINT.csv'))
+    #     result = {
+    #         'avg_accuracy': avg_acc,
+    #         'avg_f1': avg_f1,
+    #         'avg_recall': avg_recall,
+    #         'avg_precision': avg_prec,
+    #         'avg_val_loss': avg_loss,
+    #         'elapsed_time': avg_elapsed
+    #     }
+    #     # result['init_mode'] = config['init_mode']
+    #     result['model_mode'] = yaml_config['model_mode']
+    #     for key, value in yaml_config['data_loading'].items():
+    #         result[f'data_{key}'] = value
+    #     for key, value in yaml_config['init_config'].items():
+    #         result[f'init_{key}'] = value
+    #     for key, value in yaml_config['model_config'].items():
+    #         result[f'model_{key}'] = value
+    #     report.append(result)
+    #     print("-----------------")
+    # output_dir = f"./log/{dataset}"
+    # os.makedirs(output_dir, exist_ok=True)
+    # save_results_to_csv(report, filename=os.path.join(output_dir, 'JOINT.csv'))

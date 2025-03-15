@@ -181,7 +181,16 @@ class JointTraining:
 
     def get_shapelets(self):
         return self.model.shapelets_blocks.get_shapelets().clone().cpu().detach().numpy()
-        
+    def transform(self, X):
+        if not isinstance(X, torch.Tensor):
+            X = torch.tensor(X, dtype=torch.float)
+        if self.to_cuda:
+            X = X.cuda()
+
+        with torch.no_grad():
+            shapelet_transform, _ = self.model.shapelets_blocks(X)
+        return shapelet_transform.squeeze().cpu().detach().numpy()
+
     def fit(
         self,
         X, FE, Y, 
