@@ -24,12 +24,13 @@ def parse_weekday_format(week_day_str):
         return pd.NaT
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--filter_mode', default='all', choices=['all', 'last', 'last2'])
+parser.add_argument('--filter_mode', default='all', choices=['all', 'last', 'last2', 'no_contract'])
 args = parser.parse_args()
 version = {
     'all': '1', 
     'last': '2',
     'last2': '3',
+    'no_contract': '4'
 }
 if __name__ == "__main__":
     print('filtering...')
@@ -39,7 +40,10 @@ if __name__ == "__main__":
     ID_label = pd.read_excel('../data/case controls PTB 02072025.xlsx', sheet_name='Sheet4')
     ID_match = pd.read_excel('../data/case controls PTB 02072025.xlsx', sheet_name='Sheet2')
     model_data['EncDate_ShiftedDate'] = pd.to_datetime(model_data['EncDate_ShiftedDate'], errors='coerce')
-    ID_label = ID_label[ID_label['Label']!='No_contractions']
+    if args.filter_mode == 'no_contract':
+        ID_label = ID_label[ID_label['Label']!='PTC_NoPTB']
+    else:
+        ID_label = ID_label[ID_label['Label']!='No_contractions']
     ID_label.rename(columns={'Mother_obsfucated_MRN': 'Mother_Obfus_MRN'}, inplace=True)
     ID_label['Encounter_date'] = pd.to_datetime(ID_label['Encounter_date'], errors='coerce')
     ID_label['Delivery_date'] = pd.to_datetime(ID_label['Delivery_date'], errors='coerce')

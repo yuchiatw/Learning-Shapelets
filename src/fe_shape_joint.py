@@ -60,6 +60,7 @@ class JointModel(nn.Module):
         self.num_features = num_features
         self.d_model = self.num_shapelets
         self.mode = mode
+        print(seq_len, window_size, step)
         self.transform_seq_len = int((seq_len - window_size)/step+1)
         
         
@@ -67,32 +68,48 @@ class JointModel(nn.Module):
                                                     step=step, window_size=window_size,
                                                     shapelets_size_and_len=shapelets_size_and_len,
                                                     dist_measure=dist_measure, to_cuda=to_cuda)
+        
         self.proj_1 = nn.Linear(self.num_shapelets, self.d_model)
         self.proj_2 = nn.Linear(self.num_features, self.d_model)
         self.fusion_weights = nn.Linear(self.d_model * 2, 2)
         
         self.positional_emb = nn.Embedding(self.transform_seq_len, self.d_model)
+        print(self.d_model, nhead)
         encoder_layers = TransformerEncoderLayer(d_model=self.d_model, nhead = nhead, batch_first=batch_first)
         self.transformer_encoder = TransformerEncoder(encoder_layers, num_layers=num_layers)
-        self.concat_layer = nn.Linear(self.d_model * 2, self.d_model)    
+        self.concat_layer = nn.Linear(self.d_model*2, self.d_model)    
         # Optional fusion network
         self.linear = nn.Linear(self.d_model, num_classes)
+        self.max = 0
         if self.to_cuda:
             self.cuda()
-    def forward(self, x, feature_sequence):
+    def forward(self, x, feature_sequence, update_max=False):
         
         x, y = self.shapelets_blocks(x)
         y = torch.squeeze(y, 1)
-        f1_proj = self.proj_1(y)
-        f2_proj = self.proj_2(feature_sequence)
-        cat_features = torch.cat([f1_proj, f2_proj], dim=-1) # (batch, time_steps, d_model*2)
+        # if update_max:
+        #     max_value = torch.max(y)
+        #     self.max = torch.max(torch.tensor([max_value, self.max]))
+        # y = 1 - y / self.max
+        # y = F.normalize(y, p=2, dim=-1)
+        y_min = y.min(dim=-1, keepdim=True)[0]
+        y_max = y.max(dim=-1, keepdim=True)[0]
+        y = (y - y_min) / (y_max - y_min + 1e-8)
+        y = 1 - y
+        
         if self.mode == 'fusion':
             # Apply dynamic weighting
+            f1_proj = self.proj_1(y)
+            f2_proj = self.proj_2(feature_sequence)
+            cat_features = torch.cat([f1_proj, f2_proj], dim=-1) # (batch, time_steps, d_model*2)
             fusion_scores = F.softmax(self.fusion_weights(cat_features), dim=-1)
             F1_weighted = fusion_scores[..., 0].unsqueeze(-1) * f1_proj  # (batch, time_steps, d_model)
             F2_weighted = fusion_scores[..., 1].unsqueeze(-1) * f2_proj  # (batch, time_steps, d_model)
             joint_output = F1_weighted + F2_weighted  # (batch, time_steps, d_model)
         else:
+            f1_proj = self.proj_1(y)
+            f2_proj = self.proj_2(feature_sequence)
+            cat_features = torch.cat([f1_proj, f2_proj], dim=-1)
             joint_output = self.concat_layer(cat_features)
         
         batch_size, _, _ = y.shape
@@ -102,6 +119,100 @@ class JointModel(nn.Module):
         # final_out = self.linear(transformer_out[:, -1, :])
         final_out = self.linear(transformer_out.mean(dim=1))
         return final_out
+class ShapeletsDistanceLoss(nn.Module):
+    """
+    Calculates the cosine similarity of a bunch of shapelets to a data set and performs global max-pooling.
+    Parameters
+    ----------
+    shapelets_size : int
+        the size of the shapelets / the number of time steps
+    num_shapelets : int
+        the number of shapelets that the block should contain
+    in_channels : int
+        the number of input channels of the dataset
+    cuda : bool
+        if true loads everything to the GPU
+    """
+    def __init__(self, dist_measure='euclidean', k=6):
+        super(ShapeletsDistanceLoss, self).__init__()
+        if not dist_measure == 'euclidean' and not dist_measure == 'cosine':
+            raise ValueError("Parameter 'dist_measure' must be either of 'euclidean' or 'cosine'.")
+        if not isinstance(k, int):
+            raise ValueError("Parameter 'k' must be an integer.")
+        self.dist_measure = dist_measure
+        self.k = k
+
+    def forward(self, x):
+        """
+        Calculate the loss as the average distance to the top k best-matching time series.
+        @param x: the shapelet transform
+        @type x: tensor(float) of shape (batch_size, n_shapelets)
+        @return: the computed loss
+        @rtype: float
+        """
+        y_top, y_topi = torch.topk(x.clamp(1e-8), self.k, largest=False if self.dist_measure == 'euclidean' else True,
+                                   sorted=False, dim=0)
+        # avoid compiler warning
+        y_loss = None
+        if self.dist_measure == 'euclidean':
+            y_loss = torch.mean(y_top)
+        elif self.dist_measure == 'cosine':
+            y_loss = torch.mean(1 - y_top)
+        return y_loss
+class ShapeletsSimilarityLoss(nn.Module):
+    """
+    Calculates the cosine similarity of each block of shapelets and averages over the blocks.
+    ----------
+    """
+    def __init__(self):
+        super(ShapeletsSimilarityLoss, self).__init__()
+
+    def cosine_distance(self, x1, x2=None, eps=1e-8):
+        """
+        Calculate the cosine similarity between all pairs of x1 and x2. x2 can be left zero, in case the similarity
+        between solely all pairs in x1 shall be computed.
+        @param x1: the first set of input vectors
+        @type x1: tensor(float)
+        @param x2: the second set of input vectors
+        @type x2: tensor(float)
+        @param eps: add small value to avoid division by zero.
+        @type eps: float
+        @return: a distance matrix containing the cosine similarities
+        @type: tensor(float)
+        """
+        x2 = x1 if x2 is None else x2
+        # unfold time series to emulate sliding window
+        x1 = x1.unfold(2, x2.shape[2], 1).contiguous()
+        x1 = x1.transpose(0, 1)
+        # normalize with l2 norm
+        x1 = x1 / x1.norm(p=2, dim=3, keepdim=True).clamp(min=1e-8)
+        x2 = x2 / x2.norm(p=2, dim=2, keepdim=True).clamp(min=1e-8)
+
+        # calculate cosine similarity via dot product on already normalized ts and shapelets
+        x1 = torch.matmul(x1, x2.transpose(1, 2))
+        # add up the distances of the channels in case of
+        # multivariate time series
+        # Corresponds to the approach 1 and 3 here: https://stats.stackexchange.com/questions/184977/multivariate-time-series-euclidean-distance
+        # and average over dims to keep range between 0 and 1
+        n_dims = x1.shape[1]
+        x1 = torch.sum(x1, dim=1) / n_dims
+        return x1
+
+    def forward(self, shapelet_blocks):
+        """
+        Calculate the loss as the sum of the averaged cosine similarity of the shapelets in between each block.
+        @param shapelet_blocks: a list of the weights (as torch parameters) of the shapelet blocks
+        @type shapelet_blocks: list of torch.parameter(tensor(float))
+        @return: the computed loss
+        @rtype: float
+        """
+        losses = 0.
+        for block in shapelet_blocks:
+            shapelets = block[1]
+            shapelets.retain_grad()
+            sim = self.cosine_distance(shapelets, shapelets)
+            losses += torch.mean(sim)
+        return losses
 
 class JointTraining:
     def __init__(self, shapelets_size_and_len, 
@@ -113,7 +224,7 @@ class JointTraining:
                  in_channels=1, step=1, 
                  num_classes=2, dist_measure='euclidean',
                  nhead = 2, num_layers = 4, 
-                 verbose = 1, 
+                 verbose = 1, k=0, l1=0.0, l2=0.0, 
                  batch_first = True,
                  to_cuda=True):
         self.model = JointModel(
@@ -136,6 +247,11 @@ class JointTraining:
         self.loss_func = loss_func
         self.verbose = verbose
         self.optimizer = None
+        self.k = k
+        self.l1 = l1
+        self.l2 = l2
+        self.loss_dist = ShapeletsDistanceLoss(dist_measure=dist_measure, k=k)
+        self.loss_sim_block = ShapeletsSimilarityLoss()
     def set_optimizer(self, optimizer):
         """
         Set an optimizer for training.
@@ -190,6 +306,64 @@ class JointTraining:
         with torch.no_grad():
             shapelet_transform, _ = self.model.shapelets_blocks(X)
         return shapelet_transform.squeeze().cpu().detach().numpy()
+    def update(self, x, fe, y, update_max='false'):
+        """
+        Performs one gradient update step for the batch of time series and corresponding labels y.
+        @param x: the batch of time series
+        @type x: array-like(float) of shape (n_batch, in_channels, len_ts)
+        @param y: the labels of x
+        @type y: array-like(long) of shape (n_batch)
+        @return: the loss for the batch
+        @rtype: float
+        """
+        yhat = self.model(x, fe, update_max)
+        loss = self.loss_func(yhat, y)
+        loss.backward()
+        self.optimizer.step()
+        self.optimizer.zero_grad()
+        return loss.item()
+    def loss_sim(self):
+        """
+        Get the weights of each shapelet block and calculate the cosine distance between the
+        shapelets inside each block and return the summed distances as their similarity loss.
+        @return: the shapelet similarity loss for the batch
+        @rtype: float
+        """
+        blocks = [params for params in self.model.named_parameters() if 'shapelets_blocks' in params[0]]
+        loss = self.loss_sim_block(blocks)
+        return loss
+    def update_regularized(self, x, fe, y):
+        """
+        Performs one gradient update step for the batch of time series and corresponding labels y using the
+        loss L_r.
+        @param x: the batch of time series
+        @type x: array-like(float) of shape (n_batch, in_channels, len_ts)
+        @param y: the labels of x
+        @type y: array-like(long) of shape (n_batch)
+        @return: the three losses cross-entropy, shapelet distance, shapelet similarity for the batch
+        @rtype: Tuple of float
+        """
+        # get cross entropy loss and compute gradients
+        y_hat = self.model(x, fe)
+        loss_ce = self.loss_func(y_hat, y)
+        loss_ce.backward(retain_graph=True)
+
+        # get shapelet distance loss and compute gradients
+        dists_mat = self.model(x, 'dists')
+        loss_dist = self.loss_dist(dists_mat) * self.l1
+        loss_dist.backward(retain_graph=True)
+
+        if self.l2 > 0.0:
+            # get shapelet similarity loss and compute gradients
+            loss_sim = self.loss_sim() * self.l2
+            loss_sim.backward(retain_graph=True)
+
+        # perform gradient upgrade step
+        self.optimizer.step()
+        self.optimizer.zero_grad()
+
+        return (loss_ce.item(), loss_dist.item(), loss_sim.item()) if self.l2 > 0.0 else (
+        loss_ce.item(), loss_dist.item())
 
     def fit(
         self,
@@ -252,12 +426,11 @@ class JointTraining:
         for epoch in progress_bar:
             batch_loss = []
             for j, (x, fe, y) in enumerate(train_loader):
-                yhat = self.model(x, fe)
-                loss = self.loss_func(yhat, y)
-                loss.backward()
-                self.optimizer.step()
-                self.optimizer.zero_grad()
-                batch_loss.append(loss.item())
+                update_max = False
+                if epoch == 0:
+                    update_max = True
+                loss = self.update(x, fe, y, update_max=update_max)
+                batch_loss.append(loss)
             loss_list.append(sum(batch_loss) / len(batch_loss))
             batch_loss = []
             if val_loader is not None:

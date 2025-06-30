@@ -22,7 +22,7 @@ config = { # default
         'step_min': 1,
     },
     'init_mode': 'pips',
-    'model_mode': 'LS_Transformer', # 'JOINT' / 'LS_FCN' / 'LS_Transformer' / 'BOSS'
+    'model_mode': 'JOINT', # 'JOINT' / 'LS_FCN' / 'LS_Transformer' / 'BOSS'
     'init_config': {
         'ws_rate': 0.1,
         'num_pip': 0.1, 

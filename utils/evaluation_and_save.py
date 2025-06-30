@@ -2,14 +2,16 @@ from sklearn.metrics import accuracy_score, f1_score, \
     roc_auc_score, precision_score, recall_score
 import csv
 
-def eval_results(y, yhat):
+def eval_results(y, yhat, average='macro'):
     if len(yhat.shape) == 2:
         yhat = yhat.argmax(axis=1)
-        
+    
     accuracy = accuracy_score(y, yhat)
-    precision = precision_score(y, yhat)
-    f1 = f1_score(y, yhat)
-    recall = recall_score(y, yhat)
+    
+    # Handle multi-class with 'average' argument
+    precision = precision_score(y, yhat, average=average)
+    f1 = f1_score(y, yhat, average=average)
+    recall = recall_score(y, yhat, average=average)
     
     return {
         'accuracy': accuracy,

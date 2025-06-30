@@ -19,6 +19,7 @@ from sklearn.preprocessing import StandardScaler
 
 from preterm_preprocessing.preterm_preprocessing import preterm_pipeline
 from public_preprocessing.public_preprocessing import public_pipeline
+from synthetic.synthetic_preprocessing import synthetic_pipeline
 from Shapelet.mul_shapelet_discovery import ShapeletDiscover
 from src.learning_shapelets import LearningShapelets as LearningShapeletsFCN
 from src.learning_shapelets_sliding_window import LearningShapelets as LearningShapeletsTranformer
@@ -31,6 +32,9 @@ import tsfel
 from utils.evaluation_and_save import eval_results, save_results_to_csv
 import torch
 import json
+import argparse
+
+torch.cuda.set_device(1)
 def torch_dist_ts_shapelet(ts, shapelet, cuda=True):
     """
     Calculate euclidean distance of shapelet to a time series via PyTorch and returns the distance along with the position in the time series.
@@ -46,7 +50,7 @@ def torch_dist_ts_shapelet(ts, shapelet, cuda=True):
     # unfold time series to emulate sliding window
     ts = ts.unfold(2, shapelet.shape[2], 1).contiguous()
     # calculate euclidean distance
-    dists = torch.cdist(ts, shapelet, p=2)
+    dists = torch.cdist(ts, shapelet, p=2)/shapelet.shape[2]
     dists = torch.sum(dists, dim=1)
     # otherwise gradient will be None
     # hard min compared to soft-min from the paper
@@ -64,28 +68,31 @@ def shapelet_initialization(
         num_shapelets_make = config['num_shapelets_make']
         num_shapelets=config['num_shapelets']
         
+        elapsed = 0
         csv_path = f'./data/list_shapelets_meta_{dataset}_{ws_rate}_{num_pip}_{num_shapelets_make}.csv'
         if (len(version) > 0):
             csv_path = f'./data/list_shapelets_meta_{dataset}_{ws_rate}_{num_pip}_{num_shapelets_make}_v{version}.csv'
         print(csv_path)
-        # if os.path.exists(csv_path):
-        #     df_shapelets_meta = pd.read_csv(csv_path)
-        #     if num_shapelets > len(df_shapelets_meta):
-        #         list_shapelets_meta = df_shapelets_meta.values
-        #     else:
-        #         list_shapelets_meta = df_shapelets_meta.values[:num_shapelets]
+        if os.path.exists(csv_path):
+            df_shapelets_meta = pd.read_csv(csv_path)
+            list_shapelets_meta = df_shapelets_meta.values
             
-        # else:
-        t1 = time.time()
-        shape = ShapeletDiscover(window_size=int(len_ts*ws_rate),num_pip=num_pip)
-        shape.extract_candidate(X_train)
-        shape.discovery(X_train, y_train)
-        list_shapelets_meta = shape.get_shapelet_info(number_of_shapelet=num_shapelets_make)
-        list_shapelets_meta = list_shapelets_meta[list_shapelets_meta[:, 3].argsort()[::-1]]
-        print(time.time() - t1)
+        else:
+            t1 = time.time()
+            shape = ShapeletDiscover(window_size=int(len_ts*ws_rate),num_pip=num_pip)
+            shape.extract_candidate(X_train)
+            shape.discovery(X_train, y_train)
+            list_shapelets_meta = shape.get_shapelet_info(number_of_shapelet=num_shapelets_make)
+            list_shapelets_meta = list_shapelets_meta[list_shapelets_meta[:, 3].argsort()[::-1]]
+            elapsed = time.time() - t1
     
         df_shapelets_meta = pd.DataFrame(list_shapelets_meta, columns=['series_position', 'start_pos', 'end_pos', 'inforgain', 'label', 'dim'])
         df_shapelets_meta.to_csv(csv_path, index=False)
+        print(len(df_shapelets_meta))
+        # Filter out long shapelets
+        max_shapelet_length = int(len_ts * 0.3)  # Example: filter out shapelets longer than 50% of the time series length
+        df_shapelets_meta = df_shapelets_meta[df_shapelets_meta['end_pos'] - df_shapelets_meta['start_pos'] <= max_shapelet_length]
+        print(len(df_shapelets_meta))
         if num_shapelets > len(df_shapelets_meta):
             list_shapelets_meta = df_shapelets_meta.values
         else:
@@ -113,7 +120,7 @@ def shapelet_initialization(
         shapelets_size_and_len = dict()
         for i in list_shapelets.keys():
             shapelets_size_and_len[i] = len(list_shapelets[i])
-        return shapelets_size_and_len, list_shapelets_meta, list_shapelets
+        return shapelets_size_and_len, list_shapelets_meta, list_shapelets, elapsed
     else:
         size_ratio = config['size_ratio']
         num_shapelets = config['num_shapelets']
@@ -196,18 +203,19 @@ def store_data(data, dataset, model, list_shapelets_meta, list_shapelets):
     match_position_end = match_position[:, :, 1].reshape(match_position.shape[0], match_position.shape[1])
     # Sort output_shapelet based on 'gain'
     output_shapelet = sorted(output_shapelet, key=lambda x: x['gain'], reverse=True)
+    output_shapelet = output_shapelet[:10]  # Keep only the top 10 shapelets based on gain
     output_dir = f"./data/{dataset}"
     
     os.makedirs(output_dir, exist_ok=True)
-    min_distance_df = pd.DataFrame(min_distance)
+    min_distance_df = pd.DataFrame(min_distance[:, :10])
     min_distance_df.to_csv(os.path.join(output_dir, "shapelet_transform.csv"), index=False)
     X_all_df = pd.DataFrame(X_all.reshape(X_all.shape[0], -1))
     X_all_df.to_csv(os.path.join(output_dir, "X_train.csv"), index=False)
     y_all_df = pd.DataFrame(y_all, columns=['label'])
     y_all_df.to_csv(os.path.join(output_dir, "label.csv"), index=False)
-    match_start_df = pd.DataFrame(match_position_start)
+    match_start_df = pd.DataFrame(match_position_start[:, :10])
     match_start_df.to_csv(os.path.join(output_dir, "match_start.csv"), index=False)
-    match_end_df = pd.DataFrame(match_position_end)
+    match_end_df = pd.DataFrame(match_position_end[:, :10])
     match_end_df.to_csv(os.path.join(output_dir, "match_end.csv"), index=False)
     output_shapelet_json = [
         {
@@ -231,7 +239,8 @@ def train_ls(
     list_shapelets_meta: np.ndarray = np.zeros(10), 
     store_results = False, 
     dataset = 'ECG200', 
-    config={}
+    config={}, 
+    version: str = ""
 ):
     X_train = data['X_train']
     X_val = data['X_val']
@@ -278,10 +287,10 @@ def train_ls(
         if dataset == 'preterm': 
             window_size = window_size
         window_step = config['step']
-        if os.path.exists(f'./data/{dataset}_X_train_split_filtered_{window_size}_{window_step}.npy'):
-            X_train_split_filtered = np.load(f'./data/{dataset}_X_train_split_filtered_{window_size}_{window_step}.npy')
-            X_val_split_filtered = np.load(f'./data/{dataset}_X_val_split_filtered_{window_size}_{window_step}.npy')
-            X_test_split_filtered = np.load(f'./data/{dataset}_X_test_split_filtered_{window_size}_{window_step}.npy')
+        if os.path.exists(f'./data/{dataset}_X_train_split_filtered_{window_size}_{window_step}_{version}.npy'):
+            X_train_split_filtered = np.load(f'./data/{dataset}_X_train_split_filtered_{window_size}_{window_step}_{version}.npy')
+            X_val_split_filtered = np.load(f'./data/{dataset}_X_val_split_filtered_{window_size}_{window_step}_{version}.npy')
+            X_test_split_filtered = np.load(f'./data/{dataset}_X_test_split_filtered_{window_size}_{window_step}_{version}.npy')
         else:
             x_train = X_train.transpose(0, 2, 1)
             x_val = X_val.transpose(0, 2, 1)
@@ -336,6 +345,7 @@ def train_ls(
                 X_val_split_filtered = X_val_split_filtered.reshape(num_val, num_windows, -1)
                 X_test_split_filtered = X_test_split_filtered.reshape(num_test, num_windows, -1)
             else:
+                
                 X_train_split = tsfel.time_series_features_extractor(cfg_file, x_train_split)
                 X_val_split = tsfel.time_series_features_extractor(cfg_file, x_val_split)
                 X_test_split = tsfel.time_series_features_extractor(cfg_file, x_test_split)
@@ -345,13 +355,13 @@ def train_ls(
                 X_train_split_filtered = X_train_split_filtered.reshape(num_train, num_windows, -1)
                 X_val_split_filtered = X_val_split_filtered.reshape(num_val, num_windows, -1)
                 X_test_split_filtered = X_test_split_filtered.reshape(num_test, num_windows, -1)
-            np.save(f'./data/{dataset}_X_train_split_filtered_{window_size}_{window_step}.npy', X_train_split_filtered)
-            np.save(f'./data/{dataset}_X_val_split_filtered_{window_size}_{window_step}.npy', X_val_split_filtered)
-            np.save(f'./data/{dataset}_X_test_split_filtered_{window_size}_{window_step}.npy', X_test_split_filtered)
+            np.save(f'./data/{dataset}_X_train_split_filtered_{window_size}_{window_step}_{version}.npy', X_train_split_filtered)
+            np.save(f'./data/{dataset}_X_val_split_filtered_{window_size}_{window_step}_{version}.npy', X_val_split_filtered)
+            np.save(f'./data/{dataset}_X_test_split_filtered_{window_size}_{window_step}_{version}.npy', X_test_split_filtered)
         
         num_features = X_train_split_filtered.shape[-1]
         print(num_features)
-    
+
         model = JointTraining(
             shapelets_size_and_len=shapelets_size_and_len,
             seq_len=len_ts, 
@@ -376,7 +386,6 @@ def train_ls(
     else:
         for i, (shapelets_size, num_shapelets) in enumerate(shapelets_size_and_len.items()):
             weights_block = get_weights_via_kmeans(X_train, shapelets_size, num_shapelets)
-            print(weights_block.shape)
             model.set_shapelet_weights_of_block(i, weights_block)
     t1 = time.time()
     model_path = config['model_path']
@@ -426,6 +435,11 @@ def exp(config, datatype = 'private', dataset='preterm', store_results = False, 
     - val_loss: validation loss
     '''
     # Data loading preprocessing pipeline
+    
+    if datatype == 'synthetic':
+        num_samples = config['data_loading']['num_samples']
+        time_step = config['data_loading']['time_step']
+        data_path = os.path.join('./data',f'synthetic_{num_samples}_{time_step}.npz')
     data_path = data_path = os.path.join('./data', f'{dataset}.npz')
     meta_path='./data/filtered_clinical_data.csv'
     strip_path='./data/filtered_strips_data.json'
@@ -443,6 +457,13 @@ def exp(config, datatype = 'private', dataset='preterm', store_results = False, 
             meta_path=meta_path, 
             strip_path=strip_path,
             data_path=data_path
+        )
+    elif datatype == 'synthetic':
+        data = synthetic_pipeline(
+            time_step=config['data_loading']['time_step'],
+            num_samples=config['data_loading']['num_samples'],
+            config=config['data_loading'],
+            root='./data'
         )
     else:
         data = public_pipeline(
@@ -474,7 +495,7 @@ def exp(config, datatype = 'private', dataset='preterm', store_results = False, 
             or config['model_mode'] == 'JOINT':
         if config['init_mode'] == 'pips':
             print(config)
-            shapelets_size_and_len, list_shapelets_meta, list_shapelets =\
+            shapelets_size_and_len, list_shapelets_meta, list_shapelets, shapetime =\
                 shapelet_initialization(X_train, y_train, 
                                         config=config['init_config'], 
                                         dataset=dataset, 
@@ -490,7 +511,8 @@ def exp(config, datatype = 'private', dataset='preterm', store_results = False, 
                 model_mode=config['model_mode'],
                 config=config['model_config'],
                 store_results=store_results, 
-                dataset=dataset
+                dataset=dataset, 
+                version=version
             )
             elapsed = final_results[0]
             results = final_results[1]
@@ -545,61 +567,80 @@ def exp(config, datatype = 'private', dataset='preterm', store_results = False, 
             eps=model_config['epsilon']
         )
         model.set_optimizer(optimizer=optimizer)
+        t1 = time.time()
         loss_list, val_loss = model.fit(
             X_train, y_train,
             X_val=X_val, Y_val=y_val,
             epochs=model_config['epochs'],
             batch_size=model_config['batch_size'],
-            shuffle=True, 
+            shuffle=model_config['shuffle'],
             model_path=model_config['model_path']
         )
+        elapsed = time.time() - t1
         model.load_model(model_config['model_path'])
         y_pred = model.predict(X_test)
         results = eval_results(y_test, y_pred)
         
    
     
-    return elapsed, results, val_loss
+    return elapsed, results, val_loss, shapetime
     
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run experiment with specified datatype and dataset.")
+    parser.add_argument('--datatype', type=str, default='public', choices=['public', 'private', 'synthetic'], help='Type of data to use')
+    parser.add_argument('--dataset', type=str, default='ECG5000', help='Dataset to use')
+    parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
+    parser.add_argument('--model', type=str, default="JOINT", help='Batch size for training')
+    parser.add_argument('--time_step', type=int, default=100, help='Time step for synthetic data (if applicable)')
+    parser.add_argument('--num_samples', type=int, default=1000, help='Number of samples for synthetic data (if applicable)')
+    args = parser.parse_args()
+    return args
+
 
 if __name__=='__main__':
-    datatype = 'public'
-    dataset = 'ECG200'
-    # configuration loading
+    args = parse_args()
+    print(args)
+    datatype = args.datatype
+    dataset = args.dataset
+    if datatype == 'synthetic':
+        dataset = f'synthetic_{args.num_samples}_{args.time_step}'
+    batch_size= args.batch_size
     config = { # default
         'data_loading': {
+            'time_step': args.time_step,  # For synthetic data only
+            'num_samples': args.num_samples,  # For synthetic data only
             'test_ratio': 0.2,
             'val_ratio': 0.2,
-            'norm_std': 'standard',
+            'norm_std': 'minmax',
             'norm_mode': 'local_before',
             'seq_min': 15,
             'pad_min': 3, 
             'step_min': 1,
         },
         'init_mode': 'pips',
-        'model_mode': 'LS_FCN',
+        'model_mode': args.model,
         'init_config': {
             'ws_rate': 0.1,
             'num_pip': 0.2, 
-            'num_shapelets_make': 100, 
+            'num_shapelets_make': 500, 
             'num_shapelets': 10,
         },
-        # 'init_config': {
-        #     'size_ratio': [0.1, 0.2], 
-        #     'num_shapelets': 10
-        # },
         'model_config': {
-            'epochs': 2000, 
-            'batch_size': 64, 
-            'model_path': f'./model/best_model_{dataset}_300.pth',
+            'window_size': 40,
+            'window_step': 20,
+            'n_bins': 4,
+            'epochs': 1000, 
+            'batch_size': batch_size, 
+            'model_path': f'./model/best_model_{dataset}_new.pth',
             'joint_mode': 'concat', # concat / fusion
             'step': 10,
-            'lr': 5e-3, 
+            'lr': 1e-3, 
             'wd': 1e-4, 
             'nhead': 2, 
+            'd_model': 8,
             'num_layers': 2, 
             'epsilon': 1e-7,
-            'shuffle': False,
+            'shuffle': True,
             'k': 0,
             'l1': 0,
             'l2': 0
@@ -608,6 +649,7 @@ if __name__=='__main__':
 
     
     report = []
+    print(dataset)
     yaml_files = glob.glob("./preterm/yaml_JOINT/*.yaml")
     for config_path in yaml_files:
         try:
@@ -618,8 +660,14 @@ if __name__=='__main__':
         except FileNotFoundError:
             print(f"Warning: {config_path} not found. Using default config.")
     yaml_config = config
-    elapsed, results, val_loss = \
-            exp(yaml_config, datatype=datatype, dataset=dataset, version='3', store_results=True)
+    elapsed, results, val_loss, shapetime = \
+            exp(yaml_config, datatype=datatype, dataset=dataset, version='4', store_results=True)
+    print(results)
+    print(elapsed)
+    # print(results, val_loss)
+    # # 'SelfRegulationSCP2', 
+    # dataset_list = ["ECG200", "ECG5000", "SonyAIBORobotSurface1", "SonyAIBORobotSurface2","Coffee", "GunPoint", "BirdChicken", "Strawberry"]
+    # batch_size = [64, 256, 64, 64, 128, 128, 128, 128]
     # for k in range(1):
     #     acc_list = []
     #     f1_list = []
@@ -629,7 +677,7 @@ if __name__=='__main__':
     #     elapsed_list = []
     #     for j in range(10):
     #         elapsed, results, val_loss = \
-    #             exp(yaml_config, datatype=datatype, dataset=dataset, version='3')
+    #             exp(yaml_config, datatype=datatype, dataset=dataset, version='4', store_results=False)
     #         acc_list.append(results['accuracy'])
     #         precision_list.append(results['precision'])
     #         f1_list.append(results['f1_score'])
@@ -651,6 +699,7 @@ if __name__=='__main__':
     #     print(f"Average validation loss: {avg_loss}")
 
     #     result = {
+    #         'dataset': dataset,
     #         'avg_accuracy': avg_acc,
     #         'avg_f1': avg_f1,
     #         'avg_recall': avg_recall,
@@ -668,6 +717,6 @@ if __name__=='__main__':
     #         result[f'model_{key}'] = value
     #     report.append(result)
     #     print("-----------------")
-    # output_dir = f"./log/{dataset}"
-    # os.makedirs(output_dir, exist_ok=True)
-    # save_results_to_csv(report, filename=os.path.join(output_dir, 'JOINT.csv'))
+    #     output_dir = f"./log/{dataset}"
+    #     os.makedirs(output_dir, exist_ok=True)
+    #     save_results_to_csv(report, filename=os.path.join(output_dir, config['model_mode']+'.csv'))

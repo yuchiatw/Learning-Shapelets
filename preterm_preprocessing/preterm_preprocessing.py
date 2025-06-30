@@ -15,7 +15,7 @@ from sklearn.preprocessing import LabelEncoder
 from utils.preprocessing import normalize_data
 
 
-mean_window_size = 4 * 2
+mean_window_size = 4
 seq_min = 15
 padding_min = 3
 step_min = 1
@@ -94,6 +94,7 @@ def preterm_pipeline(
             step=step)
     label_encoder = LabelEncoder()
     label_encoder.fit(y_train)
+    print(label_encoder.classes_)
     y_train = label_encoder.transform(y_train)
     y_val = label_encoder.transform(y_val)
     y_test = label_encoder.transform(y_test)
@@ -302,8 +303,8 @@ if __name__ == "__main__":
     # )    
     preterm_pipeline(
         config=config, 
-        meta_path='./data/filtered_clinical_data_v2.csv',
-        strip_path='./data/filtered_strips_data_v2.json',
+        meta_path='./data/filtered_clinical_data_v4.csv',
+        strip_path='./data/filtered_strips_data_v4.json',
         data_path='./data/preterm_v4.npz'
     )    
     

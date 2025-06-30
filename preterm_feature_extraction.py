@@ -47,7 +47,7 @@ def clean_feature_name(feature):
 
 if __name__ == '__main__':
     
-    data = np.load('./data/preterm_v3.npz')
+    data = np.load('./data/ECG5000.npz')
     x_train = data['X_train'].transpose(0, 2, 1)
     x_val = data['X_val'].transpose(0, 2, 1)
     x_test = data['X_test'].transpose(0, 2, 1)
@@ -70,12 +70,12 @@ if __name__ == '__main__':
     
     # X_train = tsfel.time_series_features_extractor(cfg_file, x_train)
     window_size = 50
-    window_step = 10
+    window_step = 1
     
     x_train_split = sliding_window_view(x_train, window_size, axis=1).transpose(0, 1, 3, 2)[:, ::window_step]
     x_val_split = sliding_window_view(x_val, window_size, axis=1).transpose(0, 1, 3, 2)[:, ::window_step]
     x_test_split = sliding_window_view(x_test, window_size, axis=1).transpose(0, 1, 3, 2)[:, ::window_step]
-    
+    print(x_train_split.shape)
     # print(x_train_split.shape)
     # print(x_val_split.shape)
     # print(x_test_split.shape)
@@ -83,6 +83,7 @@ if __name__ == '__main__':
     x_train_split = x_train_split.reshape(num_train * num_windows, window_size, in_channels)
     x_val_split = x_val_split.reshape(num_val * num_windows, window_size, in_channels)
     x_test_split = x_test_split.reshape(num_test * num_windows, window_size, in_channels)
+    print(x_train_split.shape)
     plt.figure(figsize=(15, 10))
     random_indices = np.random.choice(x_train_split.shape[0], 5, replace=False)
     # Remove rows where all values are the same (constant signal)
@@ -106,42 +107,42 @@ if __name__ == '__main__':
    # Apply cleaning to all selected features
     # clean_selected_features = [clean_feature_name(feat) for feat in corr_features]
     # print(clean_selected_features)
-    clean_selected_features = ['Average power', 'ECDF Percentile Count', 
-                               'LPCC', 'LPCC', 'LPCC', 'LPCC', 'LPCC', 
-                               'Median', 'Root mean square', 'Spectral distance', 
-                               'Spectral roll-off', 'Spectral skewness', 'Spectral slope', \
-                                'Spectral spread', 'Standard deviation', 'Sum absolute diff', 
-                                'Wavelet absolute mean_25.0Hz', 'Wavelet absolute mean_3.12Hz', 
-                                'Wavelet absolute mean_3.57Hz', 'Wavelet absolute mean_4.17Hz', 
-                                'Wavelet absolute mean_5.0Hz', 'Wavelet absolute mean_6.25Hz', 
-                                'Wavelet absolute mean_8.33Hz', 'Wavelet energy_25.0Hz', 'Wavelet energy_3.12Hz', 
-                                'Wavelet energy_3.57Hz', 'Wavelet energy_4.17Hz', 'Wavelet energy_5.0Hz', 
-                                'Wavelet energy_6.25Hz', 'Wavelet energy_8.33Hz', 'Wavelet standard deviation_12.5Hz', 
-                                'Wavelet standard deviation_2.78Hz', 'Wavelet standard deviation_25.0Hz', 'Wavelet standard deviation_3.12Hz', 
-                                'Wavelet standard deviation_3.57Hz', 'Wavelet standard deviation_4.17Hz', 'Wavelet standard deviation_5.0Hz', 
-                                'Wavelet standard deviation_6.25Hz', 'Wavelet standard deviation_8.33Hz', 'Wavelet variance_2.78Hz', 
-                                'Wavelet variance_3.12Hz', 'Wavelet variance_3.57Hz', 'Wavelet variance_4.17Hz', 'Wavelet variance_5.0Hz', 
-                                'Wavelet variance_6.25Hz', 'Wavelet variance_8.33Hz']
-    # clean_selected_features = ['Average power', 'ECDF Percentile Count', 'Median', 'Standard deviation']
-    # print(clean_selected_features)
-    # print(X_train.columns)
-    # Disable all features in cfg_file first
-    for domain in cfg_file.keys():
-        for feature in cfg_file[domain]:
-            cfg_file[domain][feature]["use"] = "no"  # Ensure correct format
+    # clean_selected_features = ['Average power', 'ECDF Percentile Count', 
+    #                            'LPCC', 'LPCC', 'LPCC', 'LPCC', 'LPCC', 
+    #                            'Median', 'Root mean square', 'Spectral distance', 
+    #                            'Spectral roll-off', 'Spectral skewness', 'Spectral slope', \
+    #                             'Spectral spread', 'Standard deviation', 'Sum absolute diff', 
+    #                             'Wavelet absolute mean_25.0Hz', 'Wavelet absolute mean_3.12Hz', 
+    #                             'Wavelet absolute mean_3.57Hz', 'Wavelet absolute mean_4.17Hz', 
+    #                             'Wavelet absolute mean_5.0Hz', 'Wavelet absolute mean_6.25Hz', 
+    #                             'Wavelet absolute mean_8.33Hz', 'Wavelet energy_25.0Hz', 'Wavelet energy_3.12Hz', 
+    #                             'Wavelet energy_3.57Hz', 'Wavelet energy_4.17Hz', 'Wavelet energy_5.0Hz', 
+    #                             'Wavelet energy_6.25Hz', 'Wavelet energy_8.33Hz', 'Wavelet standard deviation_12.5Hz', 
+    #                             'Wavelet standard deviation_2.78Hz', 'Wavelet standard deviation_25.0Hz', 'Wavelet standard deviation_3.12Hz', 
+    #                             'Wavelet standard deviation_3.57Hz', 'Wavelet standard deviation_4.17Hz', 'Wavelet standard deviation_5.0Hz', 
+    #                             'Wavelet standard deviation_6.25Hz', 'Wavelet standard deviation_8.33Hz', 'Wavelet variance_2.78Hz', 
+    #                             'Wavelet variance_3.12Hz', 'Wavelet variance_3.57Hz', 'Wavelet variance_4.17Hz', 'Wavelet variance_5.0Hz', 
+    #                             'Wavelet variance_6.25Hz', 'Wavelet variance_8.33Hz']
+    # # clean_selected_features = ['Average power', 'ECDF Percentile Count', 'Median', 'Standard deviation']
+    # # print(clean_selected_features)
+    # # print(X_train.columns)
+    # # Disable all features in cfg_file first
+    # for domain in cfg_file.keys():
+    #     for feature in cfg_file[domain]:
+    #         cfg_file[domain][feature]["use"] = "no"  # Ensure correct format
 
-    # Enable only the selected features
-    for domain in cfg_file.keys():
-        for feature in cfg_file[domain]:
-            if feature in clean_selected_features:
-                cfg_file[domain][feature]["use"] =  "yes"
-    # print(cfg_file)
-    X_train_split_filtered = tsfel.time_series_features_extractor(cfg_file, x_train_split)
-    print(X_train_split_filtered.shape)
+    # # Enable only the selected features
+    # for domain in cfg_file.keys():
+    #     for feature in cfg_file[domain]:
+    #         if feature in clean_selected_features:
+    #             cfg_file[domain][feature]["use"] =  "yes"
+    # # print(cfg_file)
+    # X_train_split_filtered = tsfel.time_series_features_extractor(cfg_file, x_train_split)
+    # print(X_train_split_filtered.shape)
     # X_train_final, corr_features, selector, scaler = feature_extraction_selection(X_train_filtered)
     # print(corr_features)
     # print(X_train_final)
-    # X_train_split = tsfel.time_series_features_extractor(cfg_file, x_train_split)
+    X_train_split = tsfel.time_series_features_extractor(cfg_file, x_train_split)
     # X_val_split = tsfel.time_series_features_extractor(cfg_file, x_val_split)
     # X_test_split = tsfel.time_series_features_extractor(cfg_file, x_test_split)
     # X_train_split_filtered, corr_features, selector, scaler = feature_extraction_selection(X_train_split)

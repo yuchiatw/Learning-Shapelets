@@ -35,18 +35,19 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
+import argparse
 
 names = [
-    "Nearest Neighbors",
-    "Linear SVM",
-    "RBF SVM",
-    "Gaussian Process",
+    # "Nearest Neighbors",
+    # "Linear SVM",
+    # "RBF SVM",
+    # "Gaussian Process",
     "Decision Tree",
-    "Random Forest",
-    "Neural Net",
-    "AdaBoost",
-    "Naive Bayes",
-    "QDA",
+    # "Random Forest",
+    # "Neural Net",
+    # "AdaBoost",
+    # "Naive Bayes",
+    # "QDA",
 ]
 
 classifiers = [
@@ -92,9 +93,12 @@ def feature_engineering(config, dataset, clf = DecisionTreeClassifier(), datatyp
     
     x_train = data['X_train'].transpose(0, 2, 1)
     x_val = data['X_val'].transpose(0, 2, 1)
+    x_train = np.concatenate((x_train, x_val), axis=0)
     x_test = data['X_test'].transpose(0, 2, 1)
     y_train = data['y_train']
     y_val = data['y_val']
+    y_train = np.concatenate((y_train, y_val), axis=0)
+    print(y_train)
     y_test = data['y_test']
     
     model_config = config['model_config']
@@ -120,20 +124,32 @@ def feature_engineering(config, dataset, clf = DecisionTreeClassifier(), datatyp
     classifier = clf
     elapsed = time.time() - t1
     # Train the classifier
-    classifier.fit(nX_train, y_train.ravel())
+    classifier.fit(nX_train, y_train)
 
     # Predict on test data
     y_val_pred = classifier.predict(nX_val)
     y_predict = classifier.predict(nX_test)
 
     # Get the classification report
-    val_loss = log_loss(y_val, y_val_pred)
+    # val_loss = log_loss(y_val, y_val_pred)
     results = eval_results(y_test, y_predict)
     
     
-    return elapsed, results, val_loss
-    
+    return elapsed, results
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run experiment with specified datatype and dataset.")
+    parser.add_argument('--datatype', type=str, default='public', choices=['public', 'private'], help='Type of data to use')
+    parser.add_argument('--dataset', type=str, default='ECG5000', help='Dataset to use')
+    parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
+    parser.add_argument('--model', type=str, default="LS_FCN", help='Batch size for training')
+    args = parser.parse_args()
+    return args
+
 if __name__ == '__main__':
+    args = parse_args()
+    datatype = args.datatype
+    dataset = args.dataset
+    batch_size= args.batch_size
     config = { # default
         'data_loading': {
             'test_ratio': 0.2,
@@ -148,7 +164,6 @@ if __name__ == '__main__':
             'threshold': 0,
         },
     }
-    dataset = 'preterm'
     report = []
     acc_list = []
     f1_list = []
@@ -158,25 +173,25 @@ if __name__ == '__main__':
     elapsed_list = []
     for name, clf in zip(names, classifiers):
         for i in range(10):
-            elapsed, results, val_loss = feature_engineering(config, dataset, clf=clf, datatype='private', version='3')
+            elapsed, results = feature_engineering(config, dataset, clf=clf, datatype=datatype, version='3')
             acc_list.append(results['accuracy'])
             precision_list.append(results['precision'])
             f1_list.append(results['f1_score'])
             recall_list.append(results['recall'])
-            val_loss_list.append(val_loss)
+            # val_loss_list.append(val_loss)
             elapsed_list.append(elapsed)
         avg_acc = sum(acc_list) / len(acc_list)
         avg_prec = sum(precision_list) / len(precision_list)
         avg_f1 = sum(f1_list) / len(f1_list)
         avg_recall = sum(recall_list) / len(recall_list)
-        avg_loss = sum(val_loss_list) / len(val_loss_list)
+        # avg_loss = sum(val_loss_list) / len(val_loss_list)
         avg_elapsed = sum(elapsed_list) / len(elapsed_list)
         result = {
             'avg_accuracy': avg_acc,
             'avg_f1': avg_f1,
             'avg_recall': avg_recall,
             'avg_precision': avg_prec,
-            'avg_val_loss': avg_loss,
+            # 'avg_val_loss': avg_loss,
             'elapsed_time': avg_elapsed,
             'model': name,
         }

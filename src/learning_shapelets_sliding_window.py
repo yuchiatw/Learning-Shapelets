@@ -57,7 +57,8 @@ class MinEuclideanDistBlock(nn.Module):
         
         # calculate euclidean distance
         x = torch.cdist(x, self.shapelets, p=2)
-        y_ = torch.cdist(y_, self.shapelets, p=3)
+        y_ = torch.cdist(y_, self.shapelets, p=2)
+        y_ = torch.sum(y_, dim=1, keepdim=True)
         y_, _ = torch.min(y_, 3)
 
         # add up the distances of the channels in case of

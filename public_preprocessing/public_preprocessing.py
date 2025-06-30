@@ -8,7 +8,7 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from aeon.datasets import load_classification
-
+import pandas as pd
 
 def mul_to_binary(script, label):
     X = []
@@ -36,11 +36,11 @@ def public_pipeline(
         }
     
     script_all, label_all = load_classification(dataset)
-    script_train,label_train = load_classification(dataset, split='train')
-    script_test,label_test= load_classification(dataset, split='test')
+    script_train, label_train = load_classification(dataset, split='train')
+    script_test, label_test= load_classification(dataset, split='test')
     
     if dataset == 'ECG5000':
-        X, y = mul_to_binary(script_train, label_train)
+        X, y = mul_to_binary(script_all, label_all)
         X_train, y_train = mul_to_binary(script_train, label_train)
         X_test, y_test = mul_to_binary(script_test, label_test)
     else:
@@ -68,7 +68,9 @@ def public_pipeline(
         if not os.path.exists(folder_name):
             os.makedirs(folder_name)
         script_all_reshaped = np.reshape(X, (X.shape[0], -1))
-        np.savetxt(os.path.join(folder_name, "script_all.csv"), script_all_reshaped, delimiter=",")
+        script_all_df = pd.DataFrame(script_all_reshaped)
+        script_all_df.to_csv(os.path.join(folder_name, "script_all.csv"), index=False)
+        # np.savetxt(os.path.join(folder_name, "script_all.csv"), script_all_reshaped, delimiter=",")
         np.savetxt(os.path.join(folder_name, "label_all.csv"), y, delimiter=",")
     data = {}
     data['X_train'] = X_train
@@ -84,3 +86,8 @@ def public_pipeline(
     return data
 if __name__ == '__main__':
     public_pipeline(dataset='ECG5000', output=True)
+    a = pd.read_csv('data/ECG5000/script_all.csv')
+    print(a.shape)
+    # for rowNum, row in enumerate(a.values):
+    #     if rowNum < 5:
+    #         print(rowNum, row)
