@@ -1,6 +1,6 @@
 import argparse
 import os
-from exp_functions import exp
+from exp_pipeline import exp
 from utils.evaluation_and_save import save_results_to_csv
 import torch
 torch.cuda.set_device(0)
@@ -16,7 +16,7 @@ def ablation_experiment(config):
     val_loss_list = []
     elapsed_list = []
     for j in range(10):
-        elapsed, results, val_loss,_ = \
+        elapsed, results, val_loss, _ = \
             exp(config, datatype=datatype, dataset=dataset, version='', store_results=False)
         acc_list.append(results['accuracy'])
         precision_list.append(results['precision'])

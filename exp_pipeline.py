@@ -1,9 +1,6 @@
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = "0"
 
-# import sys
-# sys.path.insert(0, os.path.abspath('../'))
-# sys.path.insert(0, os.getcwd())
 print(f"Executing script at: {os.getcwd()}")
 import numpy as np
 import pandas as pd
@@ -20,7 +17,7 @@ from sklearn.preprocessing import StandardScaler
 from preterm_preprocessing.preterm_preprocessing import preterm_pipeline
 from public_preprocessing.public_preprocessing import public_pipeline
 from synthetic.synthetic_preprocessing import synthetic_pipeline
-from Shapelet.mul_shapelet_discovery import ShapeletDiscover
+from shapelet_candidate.mul_shapelet_discovery import ShapeletDiscover
 from src.learning_shapelets import LearningShapelets as LearningShapeletsFCN
 from src.learning_shapelets_sliding_window import LearningShapelets as LearningShapeletsTranformer
 from src.vanilla_transformer import Vanilla
@@ -29,7 +26,7 @@ from pyts.classification import BOSSVS # only univariate format
 from src.fe_shape_joint import feature_extraction_selection, extraction_pipeline
 from numpy.lib.stride_tricks import sliding_window_view
 import tsfel
-from utils.evaluation_and_save import eval_results, save_results_to_csv
+from utils.evaluation_and_save import eval_results 
 import torch
 import json
 import argparse
@@ -96,17 +93,7 @@ def shapelet_initialization(
         if num_shapelets > len(df_shapelets_meta):
             list_shapelets_meta = df_shapelets_meta.values
         else:
-            every = int(num_shapelets/num_classes)
             list_shapelets_meta = df_shapelets_meta.values[:num_shapelets]
-            # list_shapelets_meta = np.zeros((num_shapelets, 6))
-            
-            # for c in range(num_classes):
-            #     class_shapelets = df_shapelets_meta[df_shapelets_meta['label'] == c].values
-            #     if len(class_shapelets) > every:
-            #         list_shapelets_meta[c * every:(c + 1) * every] = df_shapelets_meta.values[:every]
-            #     else:
-            #         list_shapelets_meta[c * every:c * every + len(class_shapelets)] = class_shapelets
-            # list_shapelets_meta = df_shapelets_meta.values[:num_shapelets]
             
         list_shapelets = {}
         for i in range(list_shapelets_meta.shape[0] if list_shapelets_meta is not None else 0):
@@ -440,7 +427,9 @@ def exp(config, datatype = 'private', dataset='preterm', store_results = False, 
         num_samples = config['data_loading']['num_samples']
         time_step = config['data_loading']['time_step']
         data_path = os.path.join('./data',f'synthetic_{num_samples}_{time_step}.npz')
-    data_path = data_path = os.path.join('./data', f'{dataset}.npz')
+    else:
+        data_path = os.path.join('./data', f'{dataset}.npz')
+    
     meta_path='./data/filtered_clinical_data.csv'
     strip_path='./data/filtered_strips_data.json'
     if len(version) > 0 and datatype == 'private':
@@ -664,59 +653,4 @@ if __name__=='__main__':
             exp(yaml_config, datatype=datatype, dataset=dataset, version='4', store_results=True)
     print(results)
     print(elapsed)
-    # print(results, val_loss)
-    # # 'SelfRegulationSCP2', 
-    # dataset_list = ["ECG200", "ECG5000", "SonyAIBORobotSurface1", "SonyAIBORobotSurface2","Coffee", "GunPoint", "BirdChicken", "Strawberry"]
-    # batch_size = [64, 256, 64, 64, 128, 128, 128, 128]
-    # for k in range(1):
-    #     acc_list = []
-    #     f1_list = []
-    #     recall_list = []
-    #     precision_list = []
-    #     val_loss_list = []
-    #     elapsed_list = []
-    #     for j in range(10):
-    #         elapsed, results, val_loss = \
-    #             exp(yaml_config, datatype=datatype, dataset=dataset, version='4', store_results=False)
-    #         acc_list.append(results['accuracy'])
-    #         precision_list.append(results['precision'])
-    #         f1_list.append(results['f1_score'])
-    #         recall_list.append(results['recall'])
-    #         val_loss_list.append(val_loss)
-    #         elapsed_list.append(elapsed)
-    #         print(results)
-    #     avg_acc = sum(acc_list) / len(acc_list)
-    #     avg_prec = sum(precision_list) / len(precision_list)
-    #     avg_f1 = sum(f1_list) / len(f1_list)
-    #     avg_recall = sum(recall_list) / len(recall_list)
-    #     avg_loss = sum(val_loss_list) / len(val_loss_list)
-    #     avg_elapsed = sum(elapsed_list) / len(elapsed_list)
-
-    #     print(f"Average accuracy: {avg_acc}")
-    #     print(f"Average precision: {avg_prec}")
-    #     print(f"Average f1-score: {avg_f1}")
-    #     print(f"Average recall score: {avg_recall}")
-    #     print(f"Average validation loss: {avg_loss}")
-
-    #     result = {
-    #         'dataset': dataset,
-    #         'avg_accuracy': avg_acc,
-    #         'avg_f1': avg_f1,
-    #         'avg_recall': avg_recall,
-    #         'avg_precision': avg_prec,
-    #         'avg_val_loss': avg_loss,
-    #         'elapsed_time': avg_elapsed
-    #     }
-    #     # result['init_mode'] = config['init_mode']
-    #     result['model_mode'] = yaml_config['model_mode']
-    #     for key, value in yaml_config['data_loading'].items():
-    #         result[f'data_{key}'] = value
-    #     for key, value in yaml_config['init_config'].items():
-    #         result[f'init_{key}'] = value
-    #     for key, value in yaml_config['model_config'].items():
-    #         result[f'model_{key}'] = value
-    #     report.append(result)
-    #     print("-----------------")
-    #     output_dir = f"./log/{dataset}"
-    #     os.makedirs(output_dir, exist_ok=True)
-    #     save_results_to_csv(report, filename=os.path.join(output_dir, config['model_mode']+'.csv'))
+   

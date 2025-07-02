@@ -2,7 +2,7 @@ import os
 import numpy as np
 import argparse
 
-from exp_functions import shapelet_initialization
+from exp_pipeline import shapelet_initialization
 from preterm_preprocessing.preterm_preprocessing import preterm_pipeline
 from public_preprocessing.public_preprocessing import public_pipeline
 import matplotlib.pyplot as plt

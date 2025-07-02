@@ -1,7 +1,7 @@
 import numpy as np
-import Shapelet.auto_pisd as auto_pisd
-import Shapelet.pst_support_method as pstsm
-import Shapelet.shapelet_support_method as ssm
+import shapelet_candidate.auto_pisd as auto_pisd
+import shapelet_candidate.pst_support_method as pstsm
+import shapelet_candidate.shapelet_support_method as ssm
 import time
 import multiprocessing
 from functools import partial

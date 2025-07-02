@@ -339,18 +339,9 @@ class ShapeletsDistBlocks(nn.Module):
                 [MinEuclideanDistBlock(shapelets_size=shapelets_size, num_shapelets=num_shapelets,
                                        window_size=window_size, in_channels=in_channels, step=step, to_cuda=self.to_cuda)
                  for shapelets_size, num_shapelets in self.shapelets_size_and_len.items()])
-        elif dist_measure == 'cross-correlation':
-            self.blocks = nn.ModuleList(
-                [MaxCrossCorrelationBlock(shapelets_size=shapelets_size, num_shapelets=num_shapelets,
-                                          in_channels=in_channels, to_cuda=self.to_cuda)
-                 for shapelets_size, num_shapelets in self.shapelets_size_and_len.items()])
-        elif dist_measure == 'cosine':
-            self.blocks = nn.ModuleList(
-                [MaxCosineSimilarityBlock(shapelets_size=shapelets_size, num_shapelets=num_shapelets,
-                                          in_channels=in_channels, to_cuda=self.to_cuda)
-                 for shapelets_size, num_shapelets in self.shapelets_size_and_len.items()])
+
         else:
-            raise ValueError("dist_measure must be either of 'euclidean', 'cross-correlation', 'cosine'")
+            raise ValueError(f"dist_measure must be 'euclidean'. Currently set to {dist_measure}.")
 
     def forward(self, x):
         """
@@ -936,10 +927,6 @@ class LearningShapelets:
                     torch.save(self.model.state_dict(), model_path)
                 else:
                     epochs_no_improve += 1
-                
-                # if epochs_no_improve >= patience:
-                #     print(f"Early stopping at epoch {epoch}")
-                #     break
                 
                 self.model.train()
         if not self.use_regularizer:
